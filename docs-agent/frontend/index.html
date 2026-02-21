@@ -116,13 +116,58 @@
             font-style: italic;
             margin-left: 10px;
         }
+
+        .message-wrapper {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            max-width: 85%;
+        }
+
+        .user-wrapper {
+            align-self: flex-end;
+            align-items: flex-end;
+        }
+
+        .ai-wrapper {
+            align-self: flex-start;
+            align-items: flex-start;
+        }
+
+        .copy-btn {
+            background: none;
+            border: none;
+            padding: 4px;
+            cursor: pointer;
+            color: #888;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: color 0.2s;
+            border-radius: 4px;
+        }
+
+        .copy-btn:hover {
+            color: #333;
+            background-color: #f0f0f0;
+        }
     </style>
 </head>
 
 <body>
     <div id="chat-container">
-        <div class="message ai-message">
-            Hello! How can I help you with this document today?
+        <div class="message-wrapper ai-wrapper">
+            <div class="message ai-message">
+                Hello! How can I help you with this document today?
+            </div>
+            <button class="copy-btn"
+                onclick="copyToClipboard(this, 'Hello! How can I help you with this document today?')">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+            </button>
         </div>
     </div>
 
@@ -144,6 +189,15 @@
         const promptInput = document.getElementById('prompt');
         const sendBtn = document.getElementById('send-btn');
 
+        const COPY_SVG = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>`;
+
+        const CHECK_SVG = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>`;
+
         promptInput.addEventListener('input', function () {
             this.style.height = 'auto';
             this.style.height = (this.scrollHeight) + 'px';
@@ -157,11 +211,39 @@
         });
 
         function appendMessage(text, role) {
-            const div = document.createElement('div');
-            div.className = 'message ' + (role === 'user' ? 'user-message' : 'ai-message');
-            div.innerText = text;
-            chatContainer.appendChild(div);
+            const wrapper = document.createElement('div');
+            wrapper.className = 'message-wrapper ' + (role === 'user' ? 'user-wrapper' : 'ai-wrapper');
+
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'message ' + (role === 'user' ? 'user-message' : 'ai-message');
+            msgDiv.innerText = text;
+
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'copy-btn';
+            copyBtn.innerHTML = COPY_SVG;
+            copyBtn.onclick = function () { copyToClipboard(this, text); };
+
+            wrapper.appendChild(msgDiv);
+            wrapper.appendChild(copyBtn);
+            chatContainer.appendChild(wrapper);
             chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function copyToClipboard(btn, text) {
+            const el = document.createElement('textarea');
+            el.value = text;
+            document.body.appendChild(el);
+            el.select();
+            document.execCommand('copy');
+            document.body.removeChild(el);
+
+            btn.innerHTML = CHECK_SVG;
+            btn.style.color = '#4CAF50';
+
+            setTimeout(() => {
+                btn.innerHTML = COPY_SVG;
+                btn.style.color = '#888';
+            }, 1000);
         }
 
         function sendMessage() {
