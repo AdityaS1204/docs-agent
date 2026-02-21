@@ -1,0 +1,9 @@
+node_modules/
+package.json
+package-lock.json
+.clasp.json
+.bashrc
+.bash_profile
+.zshrc
+.zprofile
+.git/
