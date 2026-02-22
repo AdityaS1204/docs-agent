@@ -29,10 +29,10 @@
 
         .message {
             max-width: 85%;
-            padding: 10px 14px;
+            padding: 8px 12px;
             border-radius: 18px;
-            font-size: 14px;
-            line-height: 1.5;
+            font-size: 11px;
+            line-height: 1.4;
             word-wrap: break-word;
         }
 
@@ -75,7 +75,7 @@
             background: transparent;
             resize: none;
             font-family: inherit;
-            font-size: 14px;
+            font-size: 13px;
             outline: none;
             padding: 4px 0;
             max-height: 100px;
@@ -151,6 +151,29 @@
             color: #333;
             background-color: #f0f0f0;
         }
+
+        /* Shimmer Effect */
+        .shimmer-wrapper {
+            align-self: flex-start;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            width: 70%;
+            margin-bottom: 12px;
+        }
+
+        @keyframes shimmer {
+            100% {
+                transform: translateX(100%);
+            }
+        }
+
+        .thinking-text {
+            font-size: 11px;
+            color: #888;
+            margin-left: 12px;
+            font-weight: 500;
+        }
     </style>
 </head>
 
@@ -196,6 +219,16 @@
 
         const CHECK_SVG = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>`;
+
+        const ARROW_SVG = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="19" x2="12" y2="5"></line>
+                <polyline points="5 12 12 5 19 12"></polyline>
+            </svg>`;
+
+        const SQUARE_SVG = `<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+            <rect x="6" y="6" width="12" height="12" rx="2" ry="2"></rect>
         </svg>`;
 
         promptInput.addEventListener('input', function () {
@@ -254,25 +287,45 @@
             promptInput.value = '';
             promptInput.style.height = 'auto';
 
+            // Loading state
             promptInput.disabled = true;
             sendBtn.disabled = true;
-            sendBtn.style.opacity = '0.5';
+            sendBtn.innerHTML = SQUARE_SVG;
+
+            // Add shimmer
+            const shimmerWrapper = document.createElement('div');
+            shimmerWrapper.id = 'shimmer-placeholder';
+            shimmerWrapper.className = 'shimmer-wrapper';
+            shimmerWrapper.innerHTML = `
+                <div class="thinking-text">AI is thinking...</div>
+            `;
+            chatContainer.appendChild(shimmerWrapper);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
 
             google.script.run
                 .withSuccessHandler(function (response) {
+                    removeShimmer();
                     appendMessage(response, 'ai');
-                    promptInput.disabled = false;
-                    sendBtn.disabled = false;
-                    sendBtn.style.opacity = '1';
-                    promptInput.focus();
+                    resetInput();
                 })
                 .withFailureHandler(function (err) {
+                    removeShimmer();
                     appendMessage("Error: " + err, 'ai');
-                    promptInput.disabled = false;
-                    sendBtn.disabled = false;
-                    sendBtn.style.opacity = '1';
+                    resetInput();
                 })
                 .processPrompt(text);
+        }
+
+        function removeShimmer() {
+            const shimmer = document.getElementById('shimmer-placeholder');
+            if (shimmer) shimmer.remove();
+        }
+
+        function resetInput() {
+            promptInput.disabled = false;
+            sendBtn.disabled = false;
+            sendBtn.innerHTML = ARROW_SVG;
+            promptInput.focus();
         }
     </script>
 </body>
