@@ -1,28 +1,3 @@
-const documentActionsSchema = {
-    type: "array",
-    items: {
-        type: "object",
-        properties: {
-            action: {
-                type: "string",
-                enum: ["insertTitle", "insertHeading", "insertParagraph", "insertListItem", "insertCodeBlock", "addPageBreak"]
-            },
-            text: { type: "string" },
-            level: { type: "number", minimum: 1, maximum: 3 },
-            bold: { type: "boolean" },
-            italic: { type: "boolean" },
-            underline: { type: "boolean" },
-            color: { type: "string", pattern: "^#[0-9A-Fa-f]{6}$" },
-            nesting: { type: "number" }
-        },
-        required: ["action"]
-    }
-};
-
-module.exports = {
-    documentActionsSchema
-};
-
 /**
  * GOOGLE DOCS AGENT — DOCUMENT SCHEMA
  * =====================================
@@ -455,13 +430,11 @@ as a strictly valid JSON object that matches the schema provided.
 
 1. ALWAYS return a single valid JSON object. No markdown, no explanation, no code fences.
 2. ALWAYS include the "operation" field as the first key.
-3. ALWAYS assign a unique block_id to every block (e.g. "b1", "b2", ...).
-4. NEVER repeat block_ids within a single response.
-5. NEVER use "\\n" inside content strings — use separate blocks instead.
-6. For operation "create", always include the "document" key.
-7. For operation "patch", always include the "patch" key with target_block_id.
-8. For operation "insert", always include the "insert" key with target_block_id and position.
-9. For operation "append", always include the "append" key.
+3. STRICT PROPERTY NAMES: Never use "align" (use "alignment"), never use "text" for main content (use "content"), never use "rows" for tables (use "cells").
+4. TABLE STRUCTURE: The "cells" property in a table block MUST be a 2D array of CELL OBJECTS, not raw strings.
+5. ALWAYS assign a unique block_id to every block (e.g. "b1", "b2", ...).
+6. NEVER use "\\n" inside content strings — use separate blocks instead.
+7. COMPREHENSIVENESS: Generate DEEP, LONG, and PROFESSIONAL documents. Do not summarize unless asked. A "report" should have multiple sections, sub-headings, and detailed paragraphs.
 
 ## BLOCK SELECTION GUIDELINES
 
@@ -469,7 +442,7 @@ as a strictly valid JSON object that matches the schema provided.
 - Use "sub_heading" with appropriate levels (1, 2, 3) for document structure.
 - Use "callout" for warnings, tips, important notices — not for regular content.
 - Use "code_block" for any code, commands, or technical syntax.
-- Use "table" for comparative or structured data — prefer it over bullet lists for comparisons.
+- Use "table" for comparative or structured data — MUST follow the nested cells schema.
 - Use "blockquote" for quotes from sources or people.
 - Use "horizontal_rule" to visually separate major sections.
 - Use "page_break" only when a section must start on a new page (e.g., appendices, chapters).
@@ -491,10 +464,10 @@ as a strictly valid JSON object that matches the schema provided.
 Automatically adapt the schema usage based on detected document format:
 
 - "thesis" / "research_paper": Include TOC, page numbers, citations, heading hierarchy, 
-  first_line_indent on paragraphs, JUSTIFIED alignment, Times New Roman font.
+  first_line_indent on paragraphs, JUSTIFIED alignment, Times New Roman font. Ensure very long, academic depth.
   
 - "report": Include TOC, page numbers, key_value header block (date, author, version),
-  horizontal_rules between sections, tables for data, callouts for findings.
+  horizontal_rules between sections, tables for data, callouts for findings. Detailed and structured.
   
 - "resume": Use key_value blocks for contact info, columns layout for skills,
   sub_headings for sections, bullet_lists for experience items. No TOC.
@@ -771,11 +744,350 @@ const EXAMPLE_RESPONSE = {
 };
 
 
+const BLOCK_ITEM_SCHEMA = {
+  type: "object",
+  oneOf: [
+    {
+      type: "object",
+      properties: {
+        block_id: { type: "string" },
+        type: { type: "string", const: "main_heading" },
+        content: { type: "string" },
+        alignment: { type: "string", enum: ["LEFT", "CENTER", "RIGHT"] },
+        font_size_pt: { type: "number" },
+        font_color: { type: "string" },
+        bold: { type: "boolean" }
+      },
+      required: ["block_id", "type", "content", "alignment", "font_size_pt", "font_color", "bold"],
+      additionalProperties: false
+    },
+    {
+      type: "object",
+      properties: {
+        block_id: { type: "string" },
+        type: { type: "string", const: "sub_heading" },
+        content: { type: "string" },
+        level: { type: "integer", enum: [1, 2, 3] },
+        alignment: { type: "string", enum: ["LEFT", "CENTER", "RIGHT"] },
+        bold: { type: "boolean" }
+      },
+      required: ["block_id", "type", "content", "level", "alignment", "bold"],
+      additionalProperties: false
+    },
+    {
+      type: "object",
+      properties: {
+        block_id: { type: "string" },
+        type: { type: "string", const: "paragraph" },
+        content: { type: "string" },
+        alignment: { type: "string", enum: ["LEFT", "CENTER", "RIGHT", "JUSTIFIED"] },
+        italic: { type: "boolean" },
+        bold: { type: "boolean" }
+      },
+      required: ["block_id", "type", "content", "alignment", "italic", "bold"],
+      additionalProperties: false
+    },
+    {
+      type: "object",
+      properties: {
+        block_id: { type: "string" },
+        type: { type: "string", const: "table" },
+        cells: {
+          type: "array",
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                content: { type: "string" },
+                bold: { type: "boolean" }
+              },
+              required: ["content", "bold"],
+              additionalProperties: false
+            }
+          }
+        }
+      },
+      required: ["block_id", "type", "cells"],
+      additionalProperties: false
+    },
+    {
+      type: "object",
+      properties: {
+        block_id: { type: "string" },
+        type: { type: "string", const: "callout" },
+        content: { type: "string" },
+        style: { type: "string", enum: ["info", "warning", "success", "danger"] },
+        title: { type: ["string", "null"] },
+        icon: { type: ["string", "null"] }
+      },
+      required: ["block_id", "type", "content", "style", "title", "icon"],
+      additionalProperties: false
+    },
+    {
+      type: "object",
+      properties: {
+        block_id: { type: "string" },
+        type: { type: "string", const: "bullet_list" },
+        items: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              content: { type: "string" },
+              indent_level: { type: "integer" }
+            },
+            required: ["content", "indent_level"],
+            additionalProperties: false
+          }
+        }
+      },
+      required: ["block_id", "type", "items"],
+      additionalProperties: false
+    },
+    {
+      type: "object",
+      properties: {
+        block_id: { type: "string" },
+        type: { type: "string", const: "horizontal_rule" }
+      },
+      required: ["block_id", "type"],
+      additionalProperties: false
+    }
+  ],
+  additionalProperties: false
+};
+
+const RESPONSE_JSON_SCHEMA = {
+  type: "object",
+  properties: {
+    operation: { type: "string", enum: ["create", "patch", "insert", "append"] },
+    document: {
+      anyOf: [
+        {
+          type: "object",
+          properties: {
+            title: { type: "string" },
+            format: { type: "string", enum: ["article", "report", "essay", "thesis", "resume", "cover_letter", "proposal", "meeting_notes", "readme", "letter", "research_paper", "blog_post", "custom"] },
+            page_setup: {
+              type: "object",
+              properties: {
+                page_size: { type: "string", enum: ["A4", "LETTER"] },
+                orientation: { type: "string", enum: ["portrait", "landscape"] },
+                margin_top_inches: { type: "number" },
+                margin_bottom_inches: { type: "number" },
+                margin_left_inches: { type: "number" },
+                margin_right_inches: { type: "number" },
+                columns: { type: "integer" }
+              },
+              required: ["page_size", "orientation", "margin_top_inches", "margin_bottom_inches", "margin_left_inches", "margin_right_inches", "columns"],
+              additionalProperties: false
+            },
+            default_style: {
+              type: "object",
+              properties: {
+                font_family: { type: "string" },
+                font_size_pt: { type: "number" },
+                line_spacing: { type: "number" },
+                text_color: { type: "string" },
+                paragraph_spacing_after_pt: { type: "number" }
+              },
+              required: ["font_family", "font_size_pt", "line_spacing", "text_color", "paragraph_spacing_after_pt"],
+              additionalProperties: false
+            },
+            options: {
+              type: "object",
+              properties: {
+                include_table_of_contents: { type: "boolean" },
+                include_page_numbers: { type: "boolean" },
+                page_number_alignment: { type: "string", enum: ["LEFT", "CENTER", "RIGHT"] },
+                include_header: { type: "boolean" },
+                header_text: { type: ["string", "null"] },
+                include_footer: { type: "boolean" },
+                footer_text: { type: ["string", "null"] }
+              },
+              required: ["include_table_of_contents", "include_page_numbers", "page_number_alignment", "include_header", "header_text", "include_footer", "footer_text"],
+              additionalProperties: false
+            },
+            blocks: {
+              type: "array",
+              items: {
+                anyOf: [
+                  {
+                    type: "object",
+                    properties: {
+                      block_id: { type: "string" },
+                      type: { type: "string", enum: ["main_heading", "sub_heading", "paragraph", "bullet_list", "numbered_list", "table", "callout", "code_block", "blockquote", "horizontal_rule", "page_break", "spacer", "key_value"] },
+                      content: { type: "string" },
+                      level: { type: "integer" },
+                      font_size_pt: { type: "number" },
+                      font_color: { type: "string" },
+                      bold: { type: "boolean" },
+                      italic: { type: "boolean" },
+                      alignment: { type: "string", enum: ["LEFT", "CENTER", "RIGHT", "JUSTIFIED"] }
+                    },
+                    required: ["block_id", "type", "content", "level", "font_size_pt", "font_color", "bold", "italic", "alignment"],
+                    additionalProperties: false
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      block_id: { type: "string" },
+                      type: { type: "string", enum: ["table"] },
+                      cells: {
+                        type: "array",
+                        items: {
+                          type: "array",
+                          items: {
+                            type: "object",
+                            properties: {
+                              content: { type: "string" },
+                              bold: { type: "boolean" }
+                            },
+                            required: ["content", "bold"],
+                            additionalProperties: false
+                          }
+                        }
+                      }
+                    },
+                    required: ["block_id", "type", "cells"],
+                    additionalProperties: false
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      block_id: { type: "string" },
+                      type: { type: "string", enum: ["bullet_list", "numbered_list"] },
+                      items: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            content: { type: "string" },
+                            indent_level: { type: "integer" }
+                          },
+                          required: ["content", "indent_level"],
+                          additionalProperties: false
+                        }
+                      }
+                    },
+                    required: ["block_id", "type", "items"],
+                    additionalProperties: false
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      block_id: { type: "string" },
+                      type: { type: "string", enum: ["callout"] },
+                      content: { type: "string" },
+                      style: { type: "string", enum: ["info", "warning", "success", "danger"] },
+                      title: { type: "string" },
+                      icon: { type: "string" }
+                    },
+                    required: ["block_id", "type", "content", "style", "title", "icon"],
+                    additionalProperties: false
+                  }
+                ]
+              }
+            }
+          },
+          required: ["title", "format", "page_setup", "default_style", "options", "blocks"],
+          additionalProperties: false
+        },
+        { type: "null" }
+      ]
+    },
+    patch: {
+      anyOf: [
+        {
+          type: "object",
+          properties: {
+            target_block_id: { type: "string" },
+            action: { type: "string", enum: ["replace", "expand", "summarize", "rewrite"] }
+            // Note: intentionally omitting blocks here to simplify schema for token limits
+          },
+          required: ["target_block_id", "action"],
+          additionalProperties: false
+        },
+        { type: "null" }
+      ]
+    },
+    insert: {
+      anyOf: [
+        {
+          type: "object",
+          properties: {
+            target_block_id: { type: "string" },
+            position: { type: "string", enum: ["before", "after"] }
+          },
+          required: ["target_block_id", "position"],
+          additionalProperties: false
+        },
+        { type: "null" }
+      ]
+    },
+    append: {
+      anyOf: [
+        {
+          type: "object",
+          properties: {
+            // simplified
+            status: { type: "string" }
+          },
+          required: ["status"],
+          additionalProperties: false
+        },
+        { type: "null" }
+      ]
+    }
+  },
+  required: ["operation", "document", "patch", "insert", "append"],
+  additionalProperties: false
+};
+
+const getJsonSchemaForType = (type) => {
+  // Clone the base schema
+  const schema = JSON.parse(JSON.stringify(RESPONSE_JSON_SCHEMA));
+
+  // Basic doc type identifier constraint
+  if (type !== 'general') {
+    // Specifically fix the format to the selected type
+    // This helps the LLM align with the user's intent
+    const docProps = schema.properties.document.anyOf[0].properties;
+
+    // Most types match their enum value
+    let formatValue = type;
+    if (type === 'technical_docs') formatValue = 'report'; // fallback for logic or use custom
+
+    // We use enum with a single value for compatibility with some strict modes
+    docProps.format = { type: "string", enum: [formatValue] };
+  }
+
+  // Specialized structural adjustments
+  switch (type) {
+    case 'report':
+    case 'research_paper':
+      schema.properties.document.anyOf[0].properties.options.properties.include_table_of_contents = { type: "boolean", enum: [true] };
+      break;
+    case 'thesis':
+      schema.properties.document.anyOf[0].properties.page_setup.properties.page_size = { type: "string", enum: ["A4"] };
+      schema.properties.document.anyOf[0].properties.options.properties.include_page_numbers = { type: "boolean", enum: [true] };
+      break;
+    case 'resume':
+      schema.properties.document.anyOf[0].properties.options.properties.include_table_of_contents = { type: "boolean", enum: [false] };
+      break;
+  }
+
+  return schema;
+};
+
 module.exports = {
   RESPONSE_SCHEMA,
   BLOCK_SCHEMAS,
   SYSTEM_PROMPT_INSTRUCTIONS,
   EXAMPLE_RESPONSE,
+  RESPONSE_JSON_SCHEMA,
   validateLLMResponse,
   getAllBlocks,
+  getJsonSchemaForType
 };
