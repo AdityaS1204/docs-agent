@@ -11,9 +11,12 @@
 
 const { getOutline, generateSection } = require('../llm/llmClient');
 
-// ──────────────────────────────────────────────
-// Main iterative handle function
-// ──────────────────────────────────────────────
+// delay helper to avoid hitting Groq rate limits
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+const DELAY_AFTER_OUTLINE_MS = 2000;  
+const DELAY_BETWEEN_SECTIONS_MS = 3000;
+
 async function handleIterativeCreate(userPrompt, docType) {
     console.log(`\n🔄 ITERATIVE MODE: ${docType.toUpperCase()}`);
     console.log(`📝 Prompt: ${userPrompt}\n`);
@@ -24,6 +27,8 @@ async function handleIterativeCreate(userPrompt, docType) {
     const { title, format, page_setup, default_style, options, sections } = outline;
 
     console.log(`✅ Outline ready: "${title}" with ${sections.length} sections`);
+
+    await sleep(DELAY_AFTER_OUTLINE_MS);
 
     // Build a running summary for context continuity across sections
     let priorSummary = '';
@@ -47,6 +52,12 @@ async function handleIterativeCreate(userPrompt, docType) {
         // Update the rolling summary so next section has context
         priorSummary = buildPriorSummary(sectionResults);
         console.log(`  ✅ Section "${section.title}" done (${sectionData.blocks?.length || 0} blocks)`);
+
+        // Respect rate limits — wait before the next section call
+        if (i < sections.length - 1) {
+            console.log(`  ⏳ Waiting ${DELAY_BETWEEN_SECTIONS_MS / 1000}s before next section...`);
+            await sleep(DELAY_BETWEEN_SECTIONS_MS);
+        }
     }
 
     console.log(`\n🎉 All ${sections.length} sections generated!`);
