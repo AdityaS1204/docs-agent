@@ -175,6 +175,40 @@
             font-weight: 500;
         }
 
+        /* Progress Bar for long-form docs */
+        .progress-bar-wrapper {
+            margin: 6px 12px 0;
+            height: 3px;
+            background: #eee;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #333, #777);
+            border-radius: 2px;
+            animation: progress-indeterminate 1.4s ease-in-out infinite;
+        }
+
+        @keyframes progress-indeterminate {
+            0% {
+                width: 0%;
+                margin-left: 0;
+            }
+
+            50% {
+                width: 70%;
+                margin-left: 10%;
+            }
+
+            100% {
+                width: 0%;
+                margin-left: 100%;
+            }
+        }
+
         /* Document Type Selection Box */
         .select-container {
             margin: 0 16px 16px;
@@ -376,6 +410,19 @@
             }, 1000);
         }
 
+        const ITERATIVE_TYPES = new Set([
+            'report', 'article', 'thesis', 'research_paper',
+            'proposal', 'meeting_notes', 'legal', 'technical_docs',
+            'case_study', 'white_paper', 'policy'
+        ]);
+
+        function getThinkingMessage(docType) {
+            if (ITERATIVE_TYPES.has(docType)) {
+                return '✍️ Generating outline + sections (may take 30–60s)...';
+            }
+            return '🤔 AI is thinking...';
+        }
+
         function sendMessage() {
             const text = promptInput.value.trim();
             if (!text) return;
@@ -389,12 +436,13 @@
             sendBtn.disabled = true;
             sendBtn.innerHTML = SQUARE_SVG;
 
-            // Add shimmer
+            // Add shimmer with dynamic message
             const shimmerWrapper = document.createElement('div');
             shimmerWrapper.id = 'shimmer-placeholder';
             shimmerWrapper.className = 'shimmer-wrapper';
             shimmerWrapper.innerHTML = `
-                <div class="thinking-text">AI is thinking...</div>
+                <div class="thinking-text">${getThinkingMessage(selectedDocType)}</div>
+                ${ITERATIVE_TYPES.has(selectedDocType) ? '<div class="progress-bar-wrapper"><div class="progress-bar-fill"></div></div>' : ''}
             `;
             chatContainer.appendChild(shimmerWrapper);
             chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -407,7 +455,7 @@
                 })
                 .withFailureHandler(function (err) {
                     removeShimmer();
-                    appendMessage("Error: " + err, 'ai');
+                    appendMessage("❌ Error: " + err, 'ai');
                     resetInput();
                 })
                 .processPrompt(text, selectedDocType);
