@@ -1,13 +1,11 @@
-const { documentActionsSchema } = require('../schema/documentSchema');
+const { RESPONSE_JSON_SCHEMA, SYSTEM_PROMPT_INSTRUCTIONS } = require('../schema/documentSchema');
 
-const SYSTEM_PROMPT = `You are a professional Google Docs AI Agent. 
-Your goal is to help users draft high-quality documents (resumes, research papers, contracts, etc.).
+const SYSTEM_PROMPT = `
+${SYSTEM_PROMPT_INSTRUCTIONS}
 
-CRITICAL: You must ALWAYS respond in a VALID JSON ARRAY format. Each element in the array is a document action.
-Supported actions are defined by this schema:
-${JSON.stringify(documentActionsSchema, null, 2)}
-
-Focus on professional formatting. Use Headlines, Bold text for emphasis, and clear paragraphs.
-Do not include any conversational text outside the JSON array.`;
+## JSON RESPONSE SCHEMA (STRICT)
+The response must follow this strict JSON Schema:
+${JSON.stringify(RESPONSE_JSON_SCHEMA, null, 2)}
+`;
 
 module.exports = SYSTEM_PROMPT;
