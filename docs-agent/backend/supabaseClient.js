@@ -8,9 +8,9 @@ let supabase = null;
 
 if (supabaseUrl && supabaseKey) {
     supabase = createClient(supabaseUrl, supabaseKey);
-    console.log('✅ Supabase client initialized.');
+    console.log('Supabase client initialized.');
 } else {
-    console.warn('⚠️ Missing SUPABASE_URL or SUPABASE_KEY in .env. Persistent memory disabled.');
+    console.warn('Missing SUPABASE_URL or SUPABASE_KEY in .env. Persistent memory disabled.');
 }
 
 module.exports = { supabase };
