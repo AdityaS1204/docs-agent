@@ -10,7 +10,7 @@ const { createJob } = require('../state/jobStore');
 const { appendToHistory } = require('../state/chatStore');
 const { v4: uuidv4 } = require('uuid');
 
-async function handleIterativeCreate(userPrompt, docType, docId = null, chatHistory = []) {
+async function handleIterativeCreate(userPrompt, docType, docId, email, chatHistory = []) {
     console.log(`\n🔄 ITERATIVE MODE: ${docType.toUpperCase()}`);
     console.log(`📝 Prompt: ${userPrompt}\n`);
 
@@ -24,8 +24,8 @@ async function handleIterativeCreate(userPrompt, docType, docId = null, chatHist
     // Context Optimization: Only save the Outline structure to memory, not the massive body text.
     if (docId) {
         const structuralSummary = `Outline Generated: ${title}\nSections:\n` +
-            sections.map((s, i) => `${i + 1}. ${s.title} (${s.type}) - ${s.description}`).join('\n');
-        appendToHistory(docId, "assistant", structuralSummary);
+            sections.map((s, i) => `${i + 1}. [ID: ${s.section_id}] ${s.title} (${s.type}) - ${s.description}`).join('\n');
+        await appendToHistory(docId, email, "assistant", structuralSummary);
     }
 
     // Store the job so /section/:jobId/:index can access outline context
