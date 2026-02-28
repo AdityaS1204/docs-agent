@@ -23,11 +23,12 @@ function showSidebar() {
 
 /**
  * Main entry point called from the sidebar.
- * Returns either the final message (single-shot) or job metadata (iterative).
+ * Returns either the final message (single-shot), job metadata (iterative), or handles immediate editing.
  */
-function processPrompt(prompt, docType) {
+function processPrompt(prompt, docType, operationMode = 'create') {
     try {
         const docId = DocumentApp.getActiveDocument().getId();
+        const userEmail = Session.getEffectiveUser().getEmail();
 
         const options = {
             method: 'post',
@@ -35,7 +36,9 @@ function processPrompt(prompt, docType) {
             payload: JSON.stringify({
                 prompt: prompt,
                 docType: docType || 'general',
-                docId: docId
+                docId: docId,
+                email: userEmail,
+                operationMode: operationMode
             }),
             muteHttpExceptions: true
         };
@@ -44,8 +47,22 @@ function processPrompt(prompt, docType) {
         const data = JSON.parse(response.getContentText());
 
         console.log('--- BACKEND RESPONSE RECEIVED ---');
-        console.log('Mode:', data.mode || (data.jobId ? 'iterative_start' : 'single-shot'));
+        console.log('Mode:', data.mode || (data.jobId ? 'iterative_start' : (data.operation || 'single-shot')));
         console.log('---------------------------------');
+
+        // Handle structural error
+        if (data.error) {
+            throw new Error(data.error);
+        }
+
+        // ── Edit Mode ──
+        if (operationMode === 'edit') {
+            if (!data.target_section_id || !data.blocks) {
+                throw new Error("AI returned invalid replacement data.");
+            }
+            replaceSectionBlocks(data.target_section_id, data.blocks);
+            return { message: "✅ Section updated successfully!", status: "complete" };
+        }
 
         // ── Iterative mode start (long-form docs) ──
         if (data.mode === 'iterative_start' || data.jobId) {
@@ -71,9 +88,13 @@ function processPrompt(prompt, docType) {
 function clearChat() {
     try {
         const docId = DocumentApp.getActiveDocument().getId();
+        const userEmail = Session.getEffectiveUser().getEmail();
+
         const url = `https://lawana-nucleoloid-leland.ngrok-free.dev/chat/${docId}`;
         const options = {
             method: 'delete',
+            contentType: 'application/json',
+            payload: JSON.stringify({ email: userEmail }),
             muteHttpExceptions: true
         };
         const response = UrlFetchApp.fetch(url, options);
@@ -128,7 +149,15 @@ function fetchAndRenderSection(jobId, index) {
         if (data.blocks && data.blocks.length > 0) {
             const doc = DocumentApp.getActiveDocument();
             const body = doc.getBody();
-            renderBlocks(body, data.blocks);
+            const addedElements = renderBlocks(body, data.blocks);
+
+            // Phase 2: Create a NamedRange spanning the new section elements
+            if (data.section_id && addedElements.length > 0) {
+                const rangeBuilder = doc.newRange();
+                rangeBuilder.addElementsBetween(addedElements[0], addedElements[addedElements.length - 1]);
+                doc.addNamedRange(data.section_id, rangeBuilder.build());
+            }
+
             doc.saveAndClose();
         }
 
@@ -136,6 +165,80 @@ function fetchAndRenderSection(jobId, index) {
     } catch (error) {
         throw new Error(`Failed to render section ${index}: ` + error.toString());
     }
+}
+
+/**
+ * Targeted Replacement for Section Edit Mode.
+ * Locates the exact section by its NamedRange ID, deletes it, and inserts new blocks perfectly in place.
+ */
+function replaceSectionBlocks(section_id, blocks) {
+    if (!blocks || blocks.length === 0) return;
+
+    const doc = DocumentApp.getActiveDocument();
+    const body = doc.getBody();
+    const namedRanges = doc.getNamedRanges();
+    const targetRange = namedRanges.find(nr => nr.getName() === section_id);
+
+    if (!targetRange) {
+        throw new Error(`Could not find section '${section_id}' in the document. It may have been deleted.`);
+    }
+
+    const range = targetRange.getRange();
+    const elements = range.getRangeElements();
+
+    if (elements.length === 0) {
+        throw new Error("Target section is empty.");
+    }
+
+    // Attempt to locate the parent and the insertion index
+    let parent = null;
+    let insertIndex = -1;
+
+    // Find the first valid element with a parent to determine our insertion point.
+    for (let re of elements) {
+        const el = re.getElement();
+        parent = el.getParent();
+        if (parent === body) {
+            insertIndex = body.getChildIndex(el);
+            break;
+        } else if (parent && parent.getParent() === body) {
+            parent = parent.getParent();
+            insertIndex = body.getChildIndex(parent);
+            break;
+        }
+    }
+
+    if (insertIndex === -1) {
+        throw new Error("Could not determine where to insert the updated section.");
+    }
+
+    // Safely remove the old elements
+    elements.reverse().forEach(re => {
+        try {
+            const el = re.getElement();
+            if (el.getParent()) {
+                if (el.isPartial()) {
+                    // For partials, it's safer to remove the whole element if we're replacing the section
+                    el.removeFromParent();
+                } else {
+                    el.removeFromParent();
+                }
+            }
+        } catch (e) { } // Ignore removals that fail (e.g., child of already removed parent)
+    });
+
+    targetRange.remove();
+
+    // Insert new elements at the exact cleared position
+    const addedElements = renderBlocks(body, blocks, insertIndex);
+
+    if (addedElements.length > 0) {
+        const rangeBuilder = doc.newRange();
+        rangeBuilder.addElementsBetween(addedElements[0], addedElements[addedElements.length - 1]);
+        doc.addNamedRange(section_id, rangeBuilder.build());
+    }
+
+    doc.saveAndClose();
 }
 
 /**
@@ -191,9 +294,23 @@ function applyPageSetup(body, setup) {
 
 /**
  * Iterates through blocks and renders them to the document body.
+ * Returns the array of appended Element objects for NamedRange tracking.
  */
-function renderBlocks(body, blocks) {
-    if (!blocks || !Array.isArray(blocks)) return;
+function renderBlocks(body, blocks, insertIndex = -1) {
+    if (!blocks || !Array.isArray(blocks)) return [];
+
+    const addedElements = [];
+    let currentIndex = insertIndex;
+
+    const getElement = (methodInsert, methodAppend, ...args) => {
+        if (currentIndex > -1) {
+            const el = methodInsert.apply(body, [currentIndex, ...args]);
+            currentIndex++;
+            return el;
+        } else {
+            return methodAppend.apply(body, args);
+        }
+    };
 
     blocks.forEach(block => {
         console.log('Rendering block: ' + block.type + ' (ID: ' + block.block_id + ')');
@@ -205,31 +322,37 @@ function renderBlocks(body, blocks) {
 
         switch (block.type) {
             case 'main_heading':
-                const title = body.appendParagraph(content).setHeading(DocumentApp.ParagraphHeading.TITLE);
+                const title = getElement(body.insertParagraph, body.appendParagraph, content);
+                title.setHeading(DocumentApp.ParagraphHeading.TITLE);
                 applyBlockStyles(title, block);
+                addedElements.push(title);
                 break;
 
             case 'sub_heading':
                 const hLevel = block.level === 1 ? DocumentApp.ParagraphHeading.HEADING1 :
                     block.level === 2 ? DocumentApp.ParagraphHeading.HEADING2 :
                         DocumentApp.ParagraphHeading.HEADING3;
-                const sub = body.appendParagraph(content).setHeading(hLevel);
+                const sub = getElement(body.insertParagraph, body.appendParagraph, content);
+                sub.setHeading(hLevel);
                 applyBlockStyles(sub, block);
+                addedElements.push(sub);
                 break;
 
             case 'paragraph':
-                const p = body.appendParagraph(content);
+                const p = getElement(body.insertParagraph, body.appendParagraph, content);
                 applyBlockStyles(p, block);
                 applyInlineStyles(p, block.inline_styles);
+                addedElements.push(p);
                 break;
 
             case 'bullet_list':
                 if (block.items) {
                     block.items.forEach(item => {
-                        const li = body.appendListItem(item.content || item.text)
-                            .setGlyphType(DocumentApp.GlyphType.BULLET)
+                        const li = getElement(body.insertListItem, body.appendListItem, item.content || item.text);
+                        li.setGlyphType(DocumentApp.GlyphType.BULLET)
                             .setNestingLevel(item.indent_level || item.nesting || 0);
                         applyBlockStyles(li, item);
+                        addedElements.push(li);
                     });
                 }
                 break;
@@ -237,21 +360,23 @@ function renderBlocks(body, blocks) {
             case 'numbered_list':
                 if (block.items) {
                     block.items.forEach(item => {
-                        const li = body.appendListItem(item.content || item.text)
-                            .setGlyphType(DocumentApp.GlyphType.NUMBER)
+                        const li = getElement(body.insertListItem, body.appendListItem, item.content || item.text);
+                        li.setGlyphType(DocumentApp.GlyphType.NUMBER)
                             .setNestingLevel(item.indent_level || item.nesting || 0);
                         applyBlockStyles(li, item);
+                        addedElements.push(li);
                     });
                 }
                 break;
 
             case 'code_block':
-                const code = body.appendParagraph(content);
+                const code = getElement(body.insertParagraph, body.appendParagraph, content);
                 const codeStyle = {};
                 codeStyle[DocumentApp.Attribute.FONT_FAMILY] = block.font_family || 'Courier New';
                 codeStyle[DocumentApp.Attribute.BACKGROUND_COLOR] = bgColor || '#F5F5F5';
                 codeStyle[DocumentApp.Attribute.FONT_SIZE] = block.font_size_pt || 10;
                 code.setAttributes(codeStyle);
+                addedElements.push(code);
                 break;
 
             case 'table':
@@ -286,8 +411,9 @@ function renderBlocks(body, blocks) {
 
                 if (tableData.length > 0 && tableData[0].length > 0) {
                     try {
-                        const table = body.appendTable(tableData);
+                        const table = getElement(body.insertTable, body.appendTable, tableData);
                         if (alignment === 'CENTER') table.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+                        addedElements.push(table);
                     } catch (e) {
                         console.error("Failed to append table data:", e, tableData);
                     }
@@ -295,43 +421,52 @@ function renderBlocks(body, blocks) {
                 break;
 
             case 'horizontal_rule':
-                body.appendHorizontalRule();
+                const hr = getElement(body.insertHorizontalRule, body.appendHorizontalRule);
+                addedElements.push(hr);
                 break;
 
             case 'page_break':
-                body.appendPageBreak();
+                const pb = getElement(body.insertPageBreak, body.appendPageBreak);
+                addedElements.push(pb);
                 break;
 
             case 'blockquote':
-                const bq = body.appendParagraph(content);
+                const bq = getElement(body.insertParagraph, body.appendParagraph, content);
                 bq.setIndentLeft(block.indent_left_inches ? block.indent_left_inches * 72 : 36);
                 bq.setItalic(true);
+                addedElements.push(bq);
                 if (block.attribution) {
-                    body.appendParagraph(block.attribution).setIndentLeft(bq.getIndentLeft()).setItalic(true);
+                    const attr = getElement(body.insertParagraph, body.appendParagraph, block.attribution);
+                    attr.setIndentLeft(bq.getIndentLeft()).setItalic(true);
+                    addedElements.push(attr);
                 }
                 break;
 
             case 'callout':
                 const coText = (block.icon ? block.icon + " " : "") + (block.title ? block.title + "\n" : "") + content;
-                const co = body.appendParagraph(coText);
+                const co = getElement(body.insertParagraph, body.appendParagraph, coText);
                 const coStyle = {};
                 coStyle[DocumentApp.Attribute.BACKGROUND_COLOR] = bgColor || (block.style === 'success' ? '#E8F5E9' : '#FFF9C4');
                 if (block.font_color === '#FFFFFF') coStyle[DocumentApp.Attribute.FOREGROUND_COLOR] = '#FFFFFF';
                 co.setAttributes(coStyle);
                 if (alignment === 'CENTER') co.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+                addedElements.push(co);
                 break;
 
             case 'key_value':
                 if (block.items) {
                     block.items.forEach(item => {
                         const kvText = (item.key_bold ? '' : '') + item.key + ': ' + item.value;
-                        const kv = body.appendParagraph(kvText);
+                        const kv = getElement(body.insertParagraph, body.appendParagraph, kvText);
                         kv.editAsText().setBold(0, item.key.length, true);
+                        addedElements.push(kv);
                     });
                 }
                 break;
         }
     });
+
+    return addedElements;
 }
 
 /**
