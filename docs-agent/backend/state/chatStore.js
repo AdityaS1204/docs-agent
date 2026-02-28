@@ -111,7 +111,7 @@ async function clearChatHistory(docId, email) {
         if (error) {
             console.error('Error clearing memory:', error.message);
         } else {
-            console.log(`🧹 Cleared database history for document: ${docId} (User: ${email})`);
+            console.log(`Cleared database history for document: ${docId} (User: ${email})`);
         }
     } catch (err) {
         console.error('Error in clearChatHistory:', err);
