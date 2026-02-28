@@ -229,7 +229,7 @@
             position: relative;
         }
 
-        #doc-type-select {
+        .select-container select {
             width: 100%;
             padding: 12px 16px;
             border-radius: 14px;
@@ -249,13 +249,13 @@
             font-family: inherit;
         }
 
-        #doc-type-select:hover {
+        .select-container select:hover {
             background: rgba(255, 255, 255, 0.8);
             border-color: rgba(0, 0, 0, 0.1);
             transform: translateY(-1px);
         }
 
-        #doc-type-select:focus {
+        .select-container select:focus {
             border-color: #000;
             background: #fff;
             box-shadow: 0 10px 25px rgba(0, 0, 0, 0.08);
@@ -330,6 +330,17 @@
         </button>
     </div>
 
+    <!-- Operation Mode Selection -->
+    <div class="select-container" style="margin-bottom: 8px;">
+        <label for="op-mode-select">Operation</label>
+        <div class="select-wrapper">
+            <select id="op-mode-select">
+                <option value="create">Generate New Document</option>
+                <option value="edit">Edit Section (Beta)</option>
+            </select>
+        </div>
+    </div>
+
     <!-- Document Types Selection & Controls -->
     <div class="select-container">
         <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 6px;">
@@ -368,11 +379,17 @@
         const promptInput = document.getElementById('prompt');
         const sendBtn = document.getElementById('send-btn');
         const docTypeSelect = document.getElementById('doc-type-select');
+        const opModeSelect = document.getElementById('op-mode-select');
         let selectedDocType = 'general';
+        let operationMode = 'create';
 
         // Update selectedDocType on change
         docTypeSelect.addEventListener('change', (e) => {
             selectedDocType = e.target.value;
+        });
+
+        opModeSelect.addEventListener('change', (e) => {
+            operationMode = e.target.value;
         });
 
         const COPY_SVG = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -468,13 +485,15 @@
             sendBtn.disabled = true;
             sendBtn.innerHTML = SQUARE_SVG;
 
+            const isIterative = ITERATIVE_TYPES.has(selectedDocType) && operationMode === 'create';
+
             // Add shimmer with dynamic message
             const shimmerWrapper = document.createElement('div');
             shimmerWrapper.id = 'shimmer-placeholder';
             shimmerWrapper.className = 'shimmer-wrapper';
             shimmerWrapper.innerHTML = `
-                <div class="thinking-text" id="thinking-msg">${getThinkingMessage(selectedDocType)}</div>
-                ${ITERATIVE_TYPES.has(selectedDocType) ? '<div class="progress-bar-wrapper"><div class="progress-bar-fill"></div></div>' : ''}
+                <div class="thinking-text" id="thinking-msg">${operationMode === 'edit' ? '✏️ Analyzing outline & rewriting section...' : getThinkingMessage(selectedDocType)}</div>
+                ${isIterative ? '<div class="progress-bar-wrapper"><div class="progress-bar-fill"></div></div>' : ''}
             `;
             chatContainer.appendChild(shimmerWrapper);
             chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -494,7 +513,7 @@
                     appendMessage("❌ Error: " + err, 'ai');
                     resetInput();
                 })
-                .processPrompt(text, selectedDocType);
+                .processPrompt(text, selectedDocType, operationMode);
         }
 
         async function handleIterativeJob(data) {
