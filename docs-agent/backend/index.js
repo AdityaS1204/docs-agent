@@ -25,14 +25,17 @@ app.get('/', (req, res) => {
     res.send('Docs Agent API is running.');
 });
 
-// Clear chat history endpoint
-app.delete('/chat/:docId', (req, res) => {
-    const docId = req.params.docId;
-    if (!docId) {
-        return res.status(400).json({ error: 'Missing docId' });
+// Clear chat memory for a specific document and user
+app.delete('/chat/:docId', async (req, res) => {
+    const { docId } = req.params;
+    const { email } = req.body; // Sent from frontend
+
+    if (!email) {
+        return res.status(400).json({ status: 'error', message: 'User email is required to clear history.' });
     }
-    clearChatHistory(docId);
-    res.json({ status: 'success', message: 'Chat context cleared' });
+
+    await clearChatHistory(docId, email);
+    res.json({ status: 'success' });
 });
 
 app.listen(port, () => {
