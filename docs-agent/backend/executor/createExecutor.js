@@ -3,10 +3,10 @@ const { CREATE_PROMPT } = require('../prompts/operationPrompts');
 const { appendToHistory } = require('../state/chatStore');
 
 async function handleCreate(userPrompt, docType, docId, email, chatHistory = []) {
-    console.log(`\n⚡ CREATE MODE: ${docType.toUpperCase()} `);
-    console.log(`📝 Prompt: ${userPrompt} \n`);
+    console.log(`\nCREATE MODE: ${docType.toUpperCase()} `);
+    console.log(`Prompt: ${userPrompt} \n`);
 
-    console.log('📋 Requesting generation from LLM...');
+    console.log('Requesting generation from LLM...');
     const result = await getCompletion(userPrompt, docType, chatHistory);
 
     if (docId) {
