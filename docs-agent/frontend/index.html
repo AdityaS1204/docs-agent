@@ -110,6 +110,10 @@
             stroke: #ffffff;
         }
 
+        .send-button.stopping {
+            background: #ef5350;
+        }
+
         .loading {
             font-size: 12px;
             color: #888;
@@ -465,14 +469,22 @@
             'case_study', 'white_paper', 'policy'
         ]);
 
+        let isProcessing = false;
+        let abortGeneration = false;
+
         function getThinkingMessage(docType) {
             if (ITERATIVE_TYPES.has(docType)) {
-                return '✍️ Generating outline + sections (may take 30–60s)...';
+                return 'Generating outline + sections (may take 30-60s)...';
             }
-            return '🤔 AI is thinking...';
+            return 'AI is thinking...';
         }
 
         function sendMessage() {
+            if (isProcessing) {
+                stopGeneration();
+                return;
+            }
+
             const text = promptInput.value.trim();
             if (!text) return;
 
@@ -481,9 +493,11 @@
             promptInput.style.height = 'auto';
 
             // Loading state
+            isProcessing = true;
+            abortGeneration = false;
             promptInput.disabled = true;
-            sendBtn.disabled = true;
             sendBtn.innerHTML = SQUARE_SVG;
+            sendBtn.classList.add('stopping');
 
             const isIterative = ITERATIVE_TYPES.has(selectedDocType) && operationMode === 'create';
 
@@ -492,7 +506,7 @@
             shimmerWrapper.id = 'shimmer-placeholder';
             shimmerWrapper.className = 'shimmer-wrapper';
             shimmerWrapper.innerHTML = `
-                <div class="thinking-text" id="thinking-msg">${operationMode === 'edit' ? '✏️ Analyzing outline & rewriting section...' : getThinkingMessage(selectedDocType)}</div>
+                <div class="thinking-text" id="thinking-msg">${operationMode === 'edit' ? 'Analyzing outline & rewriting section...' : getThinkingMessage(selectedDocType)}</div>
                 ${isIterative ? '<div class="progress-bar-wrapper"><div class="progress-bar-fill"></div></div>' : ''}
             `;
             chatContainer.appendChild(shimmerWrapper);
@@ -500,6 +514,8 @@
 
             google.script.run
                 .withSuccessHandler(function (response) {
+                    if (abortGeneration) return;
+
                     if (response.jobId) {
                         handleIterativeJob(response);
                     } else {
@@ -509,25 +525,32 @@
                     }
                 })
                 .withFailureHandler(function (err) {
+                    if (abortGeneration) return;
                     removeShimmer();
-                    appendMessage("❌ Error: " + err, 'ai');
+                    appendMessage("Error: " + err, 'ai');
                     resetInput();
                 })
                 .processPrompt(text, selectedDocType, operationMode);
+        }
+
+        function stopGeneration() {
+            abortGeneration = true;
+            removeShimmer();
+            appendMessage("Generation stopped by user.", "ai");
+            resetInput();
         }
 
         async function handleIterativeJob(data) {
             const { jobId, sections_meta } = data;
             const total = sections_meta.length;
             const thinkingMsg = document.getElementById('thinking-msg');
-            let hasError = false;
 
             for (let i = 0; i < total; i++) {
-                if (hasError) break;
+                if (abortGeneration) break;
 
                 const section = sections_meta[i];
                 if (thinkingMsg) {
-                    thinkingMsg.innerText = `✍️ Writing Section ${i + 1}/${total}: ${section.title}...`;
+                    thinkingMsg.innerText = `Writing Section ${i + 1}/${total}: ${section.title}...`;
                 }
 
                 // Call GAS function to fetch and render this specific section
@@ -545,17 +568,17 @@
                             .fetchAndRenderSection(jobId, i);
                     });
                 } catch (err) {
-                    hasError = true;
+                    if (abortGeneration) return;
                     removeShimmer();
-                    appendMessage(`❌ Failed during section ${i + 1}: ` + err.message, 'ai');
+                    appendMessage(`Failed during section ${i + 1}: ` + err.message, 'ai');
                     resetInput();
                     return;
                 }
             }
 
-            if (!hasError) {
+            if (!abortGeneration) {
                 removeShimmer();
-                appendMessage(`✅ Document complete! Generated ${total} sections with full content.`, 'ai');
+                appendMessage(`Document complete! Generated ${total} sections with full content.`, 'ai');
                 resetInput();
             }
         }
@@ -566,9 +589,12 @@
         }
 
         function resetInput() {
+            isProcessing = false;
+            abortGeneration = false;
             promptInput.disabled = false;
             sendBtn.disabled = false;
             sendBtn.innerHTML = ARROW_SVG;
+            sendBtn.classList.remove('stopping');
             promptInput.focus();
         }
 
@@ -582,7 +608,7 @@
                     appendMessage(res, 'ai');
                 })
                 .withFailureHandler(function (err) {
-                    appendMessage("❌ Failed to clear memory: " + err, 'ai');
+                    appendMessage("Failed to clear memory: " + err, 'ai');
                 })
                 .clearChat();
         }
