@@ -23,7 +23,7 @@ router.get('/:jobId/:index', async (req, res) => {
     }
 
     try {
-        console.log(`📝 [Job ${jobId}] Generating section ${sectionIndex + 1}/${job.sections.length}: "${section.title}"`);
+        console.log(`[Job ${jobId}] Generating section ${sectionIndex + 1}/${job.sections.length}: "${section.title}"`);
 
         const docContext = { title: job.title, format: job.format };
         const priorSummary = job.priorSummary || '';
@@ -38,7 +38,7 @@ router.get('/:jobId/:index', async (req, res) => {
             .join(' ');
         job.priorSummary = (job.priorSummary || '') + `\n[${section.title}]: ${sectionText}`;
 
-        console.log(`  ✅ Section "${section.title}" done (${sectionData.blocks?.length || 0} blocks)`);
+        console.log(`  Section "${section.title}" done (${sectionData.blocks?.length || 0} blocks)`);
 
         res.json({
             section_id: section.section_id,
