@@ -61,7 +61,7 @@ function processPrompt(prompt, docType, operationMode = 'create') {
                 throw new Error("AI returned invalid replacement data.");
             }
             replaceSectionBlocks(data.target_section_id, data.blocks);
-            return { message: "✅ Section updated successfully!", status: "complete" };
+            return { message: "Section updated successfully!", status: "complete" };
         }
 
         // ── Iterative mode start (long-form docs) ──
@@ -74,11 +74,11 @@ function processPrompt(prompt, docType, operationMode = 'create') {
         // ── Single-shot mode (short-form docs) ──
         if (data.operation) {
             executeOperation(data);
-            return { message: "✅ Document created successfully!", status: "complete" };
+            return { message: "Document created successfully!", status: "complete" };
         }
 
     } catch (error) {
-        return { message: "❌ Error: " + error.toString(), status: "error" };
+        return { message: "Error: " + error.toString(), status: "error" };
     }
 }
 
@@ -99,9 +99,9 @@ function clearChat() {
         };
         const response = UrlFetchApp.fetch(url, options);
         const data = JSON.parse(response.getContentText());
-        return data.status === 'success' ? "🧹 Memory cleared for this document." : "❌ Failed to clear memory.";
+        return data.status === 'success' ? "Memory cleared for this document." : "Failed to clear memory.";
     } catch (error) {
-        return "❌ Error clearing memory: " + error.toString();
+        return "Error clearing memory: " + error.toString();
     }
 }
 
