@@ -3,6 +3,7 @@
  */
 
 const BACKEND_URL = 'https://lawana-nucleoloid-leland.ngrok-free.dev/generate';
+const SECTION_URL = 'https://lawana-nucleoloid-leland.ngrok-free.dev/section';
 
 function onOpen() {
     DocumentApp.getUi()
@@ -22,16 +23,19 @@ function showSidebar() {
 
 /**
  * Main entry point called from the sidebar.
- * Returns a status/message string for the chat bubble.
+ * Returns either the final message (single-shot) or job metadata (iterative).
  */
 function processPrompt(prompt, docType) {
     try {
+        const docId = DocumentApp.getActiveDocument().getId();
+
         const options = {
             method: 'post',
             contentType: 'application/json',
             payload: JSON.stringify({
                 prompt: prompt,
-                docType: docType || 'general'
+                docType: docType || 'general',
+                docId: docId
             }),
             muteHttpExceptions: true
         };
@@ -40,55 +44,98 @@ function processPrompt(prompt, docType) {
         const data = JSON.parse(response.getContentText());
 
         console.log('--- BACKEND RESPONSE RECEIVED ---');
-        console.log('Mode:', data.mode || 'single-shot');
+        console.log('Mode:', data.mode || (data.jobId ? 'iterative_start' : 'single-shot'));
         console.log('---------------------------------');
 
-        // ── Iterative mode (long-form docs) ──
-        if (data.mode === 'iterative' && data.sections) {
-            return handleIterativeResponse(data);
+        // ── Iterative mode start (long-form docs) ──
+        if (data.mode === 'iterative_start' || data.jobId) {
+            // Document setup (title, etc.) happens once at the start
+            setupDocument(data.document);
+            return data; // Return full metadata to UI to handle the loop
         }
 
         // ── Single-shot mode (short-form docs) ──
         if (data.operation) {
             executeOperation(data);
-            return "✅ Document created successfully!";
+            return { message: "✅ Document created successfully!", status: "complete" };
         }
 
-        return data.display_message || "Done processing.";
-
     } catch (error) {
-        return "❌ Error: " + error.toString();
+        return { message: "❌ Error: " + error.toString(), status: "error" };
     }
 }
 
 /**
- * Handles the iterative response by rendering the document
- * section by section with real-time progress reporting.
+ * Clears the chat history for the current document on the backend.
  */
-function handleIterativeResponse(data) {
+function clearChat() {
+    try {
+        const docId = DocumentApp.getActiveDocument().getId();
+        const url = `https://lawana-nucleoloid-leland.ngrok-free.dev/chat/${docId}`;
+        const options = {
+            method: 'delete',
+            muteHttpExceptions: true
+        };
+        const response = UrlFetchApp.fetch(url, options);
+        const data = JSON.parse(response.getContentText());
+        return data.status === 'success' ? "🧹 Memory cleared for this document." : "❌ Failed to clear memory.";
+    } catch (error) {
+        return "❌ Error clearing memory: " + error.toString();
+    }
+}
+
+/**
+ * Sets up document metadata (title, page setup).
+ */
+function setupDocument(docMetadata) {
+    if (!docMetadata) return;
     const doc = DocumentApp.getActiveDocument();
     const body = doc.getBody();
 
-    // Set document title and page setup first
-    if (data.document) {
-        if (data.document.title) doc.setName(data.document.title);
-        applyPageSetup(body, data.document.page_setup);
-    }
-
-    const totalSections = data.sections.length;
-    let renderedCount = 0;
-
-    // Render each section's blocks
-    for (const section of data.sections) {
-        if (section.blocks && section.blocks.length > 0) {
-            renderBlocks(body, section.blocks);
-        }
-        renderedCount++;
-        console.log(`Rendered section ${renderedCount}/${totalSections}: ${section.title}`);
-    }
+    if (docMetadata.title) doc.setName(docMetadata.title);
+    applyPageSetup(body, docMetadata.page_setup);
 
     doc.saveAndClose();
-    return `✅ Document complete! Generated ${totalSections} sections with full content.`;
+}
+
+/**
+ * Fetches and renders a single section from the backend.
+ * Called iteratively from the sidebar UI.
+ */
+function fetchAndRenderSection(jobId, index) {
+    try {
+        const url = `${SECTION_URL}/${jobId}/${index}`;
+        const options = {
+            method: 'get',
+            headers: {
+                'ngrok-skip-browser-warning': 'true'
+            },
+            muteHttpExceptions: true
+        };
+
+        const response = UrlFetchApp.fetch(url, options);
+        let data;
+        try {
+            data = JSON.parse(response.getContentText());
+        } catch (e) {
+            throw new Error(`Failed to parse backend response for section ${index}. Content: ` + response.getContentText().substring(0, 50));
+        }
+
+        if (data.error) {
+            throw new Error(data.error);
+        }
+
+        if (data.blocks && data.blocks.length > 0) {
+            const doc = DocumentApp.getActiveDocument();
+            const body = doc.getBody();
+            renderBlocks(body, data.blocks);
+            doc.saveAndClose();
+        }
+
+        return { status: "success", title: data.title };
+    } catch (error) {
+        throw new Error(`Failed to render section ${index}: ` + error.toString());
+    }
 }
 
 /**
@@ -212,17 +259,38 @@ function renderBlocks(body, blocks) {
                 const rawCells = block.cells || block.content || block.rows;
 
                 if (Array.isArray(rawCells)) {
-                    tableData = rawCells.map(row => {
+                    // Extract strings and handle object parsing
+                    tableData = rawCells.map((row) => {
                         if (Array.isArray(row)) {
-                            return row.map(cell => (typeof cell === 'object' ? cell.content : cell));
+                            return row.map((cell) => {
+                                if (cell === null || cell === undefined) return "";
+                                return typeof cell === 'object' ? (cell.content || cell.text || "") : cell.toString();
+                            });
                         }
-                        return [row.toString()];
+                        return [row ? row.toString() : ""];
                     });
+
+                    // Google Docs appendTable REQUIRES a perfectly rectangular 2D array.
+                    // If the LLM generated jagged rows, it crashes with "Invalid argument: cells[x][y]"
+                    if (tableData.length > 0) {
+                        const maxCols = Math.max(...tableData.map(row => row.length));
+                        tableData = tableData.map(row => {
+                            const paddedRow = [...row];
+                            while (paddedRow.length < maxCols) {
+                                paddedRow.push("");
+                            }
+                            return paddedRow;
+                        });
+                    }
                 }
 
-                if (tableData.length > 0) {
-                    const table = body.appendTable(tableData);
-                    if (alignment === 'CENTER') table.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+                if (tableData.length > 0 && tableData[0].length > 0) {
+                    try {
+                        const table = body.appendTable(tableData);
+                        if (alignment === 'CENTER') table.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+                    } catch (e) {
+                        console.error("Failed to append table data:", e, tableData);
+                    }
                 }
                 break;
 
