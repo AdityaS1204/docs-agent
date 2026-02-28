@@ -275,6 +275,28 @@
             border-top: 5px solid #666;
             pointer-events: none;
         }
+
+        /* Clear Chat Button */
+        .clear-chat-btn {
+            background: none;
+            border: none;
+            color: #999;
+            font-size: 10px;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            transition: all 0.2s;
+            font-family: inherit;
+        }
+
+        .clear-chat-btn:hover {
+            color: #e53935;
+            background: rgba(229, 57, 53, 0.1);
+        }
     </style>
 </head>
 
@@ -308,9 +330,19 @@
         </button>
     </div>
 
-    <!-- Document Types Selection -->
+    <!-- Document Types Selection & Controls -->
     <div class="select-container">
-        <label for="doc-type-select">Document Format</label>
+        <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 6px;">
+            <label for="doc-type-select" style="margin-bottom: 0;">Document Format</label>
+            <button class="clear-chat-btn" onclick="clearChat()" title="Clear AI Memory for this document">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                </svg>
+                Clear Memory
+            </button>
+        </div>
         <div class="select-wrapper">
             <select id="doc-type-select">
                 <option value="general">Default / General</option>
@@ -441,7 +473,7 @@
             shimmerWrapper.id = 'shimmer-placeholder';
             shimmerWrapper.className = 'shimmer-wrapper';
             shimmerWrapper.innerHTML = `
-                <div class="thinking-text">${getThinkingMessage(selectedDocType)}</div>
+                <div class="thinking-text" id="thinking-msg">${getThinkingMessage(selectedDocType)}</div>
                 ${ITERATIVE_TYPES.has(selectedDocType) ? '<div class="progress-bar-wrapper"><div class="progress-bar-fill"></div></div>' : ''}
             `;
             chatContainer.appendChild(shimmerWrapper);
@@ -449,9 +481,13 @@
 
             google.script.run
                 .withSuccessHandler(function (response) {
-                    removeShimmer();
-                    appendMessage(response, 'ai');
-                    resetInput();
+                    if (response.jobId) {
+                        handleIterativeJob(response);
+                    } else {
+                        removeShimmer();
+                        appendMessage(response.message || response, 'ai');
+                        resetInput();
+                    }
                 })
                 .withFailureHandler(function (err) {
                     removeShimmer();
@@ -459,6 +495,50 @@
                     resetInput();
                 })
                 .processPrompt(text, selectedDocType);
+        }
+
+        async function handleIterativeJob(data) {
+            const { jobId, sections_meta } = data;
+            const total = sections_meta.length;
+            const thinkingMsg = document.getElementById('thinking-msg');
+            let hasError = false;
+
+            for (let i = 0; i < total; i++) {
+                if (hasError) break;
+
+                const section = sections_meta[i];
+                if (thinkingMsg) {
+                    thinkingMsg.innerText = `✍️ Writing Section ${i + 1}/${total}: ${section.title}...`;
+                }
+
+                // Call GAS function to fetch and render this specific section
+                try {
+                    await new Promise((resolve, reject) => {
+                        google.script.run
+                            .withSuccessHandler(function (res) {
+                                console.log('Rendered section:', res.title);
+                                resolve();
+                            })
+                            .withFailureHandler(function (err) {
+                                console.error('Section error:', err);
+                                reject(err);
+                            })
+                            .fetchAndRenderSection(jobId, i);
+                    });
+                } catch (err) {
+                    hasError = true;
+                    removeShimmer();
+                    appendMessage(`❌ Failed during section ${i + 1}: ` + err.message, 'ai');
+                    resetInput();
+                    return;
+                }
+            }
+
+            if (!hasError) {
+                removeShimmer();
+                appendMessage(`✅ Document complete! Generated ${total} sections with full content.`, 'ai');
+                resetInput();
+            }
         }
 
         function removeShimmer() {
@@ -471,6 +551,21 @@
             sendBtn.disabled = false;
             sendBtn.innerHTML = ARROW_SVG;
             promptInput.focus();
+        }
+
+        function clearChat() {
+            if (!confirm("Are you sure you want to wipe the AI's memory for this document?")) return;
+
+            appendMessage("Clearing memory...", "user");
+
+            google.script.run
+                .withSuccessHandler(function (res) {
+                    appendMessage(res, 'ai');
+                })
+                .withFailureHandler(function (err) {
+                    appendMessage("❌ Failed to clear memory: " + err, 'ai');
+                })
+                .clearChat();
         }
     </script>
 </body>
