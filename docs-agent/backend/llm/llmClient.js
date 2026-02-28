@@ -1,5 +1,7 @@
 const Groq = require('groq-sdk');
 const SYSTEM_PROMPT = require('../prompts/systemPrompt');
+const { SYSTEM_PROMPT_INSTRUCTIONS } = require('../schema/documentSchema');
+const { isIterativeType } = require('../schema/iterativeSchema');
 const { MODELS, TOKEN_LIMITS } = require('../config/constants');
 const { validateLLMResponse, getJsonSchemaForType } = require('../schema/documentSchema');
 const { OUTLINE_SCHEMA, SECTION_SCHEMA } = require('../schema/iterativeSchema');
@@ -11,16 +13,16 @@ const groq = new Groq({
 // ─────────────────────────────────────────
 // Single-shot completion (short-form docs)
 // ─────────────────────────────────────────
-async function getCompletion(userPrompt, docType = 'general') {
+async function getCompletion(prompt, docType, chatHistory = []) {
+    let schemaName = "RESPONSE_SCHEMA";
+    let systemPromptBase = "You are a professional document creation AI. " + SYSTEM_PROMPT_INSTRUCTIONS;
     try {
         const schema = getJsonSchemaForType(docType);
         const chatCompletion = await groq.chat.completions.create({
             messages: [
-                {
-                    role: 'system',
-                    content: SYSTEM_PROMPT + `\n\n## DOCUMENT CONTEXT\nThe user wants to create a: ${docType.toUpperCase()}.`
-                },
-                { role: 'user', content: userPrompt },
+                { role: "system", content: systemPromptBase },
+                ...chatHistory,
+                { role: "user", content: `Create a ${docType} based on this prompt: ${prompt}` }
             ],
             model: MODELS.GPT_OSS_120B,
             response_format: {
@@ -56,7 +58,7 @@ async function getCompletion(userPrompt, docType = 'general') {
 // ─────────────────────────────────────────
 // Phase 1: Generate document outline
 // ─────────────────────────────────────────
-async function getOutline(userPrompt, docType) {
+async function getOutline(userPrompt, docType, chatHistory = []) {
     const systemMsg = `You are a document planning agent. Your job is to generate a structured document outline.
 The user wants a ${docType.toUpperCase()} document. 
 Create a comprehensive outline with 8 to 12 sections.
@@ -67,6 +69,7 @@ Return ONLY valid JSON. No markdown. No explanation.`;
         const chatCompletion = await groq.chat.completions.create({
             messages: [
                 { role: 'system', content: systemMsg },
+                ...chatHistory,
                 { role: 'user', content: `Create a detailed outline for: ${userPrompt}` },
             ],
             model: MODELS.GPT_OSS_120B,
@@ -126,7 +129,10 @@ Section ID: ${sectionMeta.section_id}`;
                 type: "json_schema",
                 json_schema: {
                     name: "section_content",
-                    strict: true,
+                    // strict: false — Groq strict mode requires ALL properties in required[].
+                    // Our block schema has optional fields per block type (cells for table,
+                    // items for lists, etc.) which is incompatible with strict: true.
+                    strict: false,
                     schema: SECTION_SCHEMA
                 }
             },
