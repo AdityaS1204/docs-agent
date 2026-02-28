@@ -2,16 +2,19 @@ const { getCompletion } = require('../llm/llmClient');
 const { CREATE_PROMPT } = require('../prompts/operationPrompts');
 const { appendToHistory } = require('../state/chatStore');
 
-async function handleCreate(userInput, docType, docId = null, chatHistory = []) {
-    const prompt = CREATE_PROMPT(userInput);
-    const actions = await getCompletion(prompt, docType, chatHistory);
+async function handleCreate(userPrompt, docType, docId, email, chatHistory = []) {
+    console.log(`\n⚡ CREATE MODE: ${docType.toUpperCase()} `);
+    console.log(`📝 Prompt: ${userPrompt} \n`);
 
-    // Context Optimization: For short-form single-shot docs, we save the full response.
-    if (docId && actions) {
-        appendToHistory(docId, "assistant", JSON.stringify(actions));
+    console.log('📋 Requesting generation from LLM...');
+    const result = await getCompletion(userPrompt, docType, chatHistory);
+
+    if (docId) {
+        // Save the full document response back to history for reference
+        await appendToHistory(docId, email, "assistant", JSON.stringify(result));
     }
 
-    return actions;
+    return result;
 }
 
 module.exports = {
