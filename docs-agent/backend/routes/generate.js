@@ -38,11 +38,11 @@ router.post('/', async (req, res) => {
         }
 
         if (isIterativeType(type)) {
-            console.log(`🔄 Using ITERATIVE mode for: ${type}`);
+            console.log(`Using ITERATIVE mode for: ${type}`);
             const response = await handleIterativeCreate(prompt, type, docId, email, chatHistory);
             res.json(response);
         } else {
-            console.log(`⚡ Using SINGLE-SHOT mode for: ${type}`);
+            console.log(`Using SINGLE-SHOT mode for: ${type}`);
             const response = await handleCreate(prompt, type, docId, email, chatHistory);
             res.json(response);
         }
