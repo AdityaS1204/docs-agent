@@ -11,15 +11,15 @@ const { appendToHistory } = require('../state/chatStore');
 const { v4: uuidv4 } = require('uuid');
 
 async function handleIterativeCreate(userPrompt, docType, docId, email, chatHistory = []) {
-    console.log(`\n🔄 ITERATIVE MODE: ${docType.toUpperCase()}`);
-    console.log(`📝 Prompt: ${userPrompt}\n`);
+    console.log(`\nITERATIVE MODE: ${docType.toUpperCase()}`);
+    console.log(`Prompt: ${userPrompt}\n`);
 
     // ── PHASE 1: Generate outline only ──
-    console.log('📋 Generating outline...');
+    console.log('Generating outline...');
     const outline = await getOutline(userPrompt, docType, chatHistory);
     const { title, format, page_setup, default_style, options, sections } = outline;
 
-    console.log(`✅ Outline ready: "${title}" with ${sections.length} sections`);
+    console.log(`Outline ready: "${title}" with ${sections.length} sections`);
 
     // Context Optimization: Only save the Outline structure to memory, not the massive body text.
     if (docId) {
@@ -32,7 +32,7 @@ async function handleIterativeCreate(userPrompt, docType, docId, email, chatHist
     const jobId = uuidv4();
     createJob(jobId, { title, format, page_setup, default_style, options, sections });
 
-    console.log(`🗂️ Job created: ${jobId}`);
+    console.log(`Job created: ${jobId}`);
 
     // Return the lightweight response — sections will be fetched one by one
     return {
