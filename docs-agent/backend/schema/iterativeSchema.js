@@ -89,78 +89,88 @@ const OUTLINE_SCHEMA = {
 
 // ──────────────────────────────────────────
 // PHASE 2: SECTION SCHEMA
-// LLM returns content blocks for one section.
-// This is the same block system, just scoped to one section at a time.
+// Single flat schema for all block types.
+// Using anyOf with strict mode + additionalProperties: false causes the LLM
+// to incorrectly map blocks into the wrong branch and fail validation.
+// A single flat schema with all optional fields is far more robust.
 // ──────────────────────────────────────────
 const SECTION_BLOCK_SCHEMA = {
-    anyOf: [
-        {
-            type: "object",
-            properties: {
-                block_id: { type: "string" },
-                type: {
-                    type: "string",
-                    enum: ["main_heading", "sub_heading", "paragraph", "bullet_list",
-                        "numbered_list", "callout", "code_block", "blockquote",
-                        "horizontal_rule", "page_break", "key_value"]
-                },
-                content: { type: "string" },
-                level: { type: "integer" },
-                font_size_pt: { type: "number" },
-                font_color: { type: "string" },
-                bold: { type: "boolean" },
-                italic: { type: "boolean" },
-                alignment: { type: "string", enum: ["LEFT", "CENTER", "RIGHT", "JUSTIFIED"] }
-            },
-            required: ["block_id", "type", "content", "level", "font_size_pt", "font_color", "bold", "italic", "alignment"],
-            additionalProperties: false
+    type: "object",
+    properties: {
+        block_id: { type: "string" },
+        type: {
+            type: "string",
+            enum: [
+                "main_heading", "sub_heading", "paragraph",
+                "bullet_list", "numbered_list", "table",
+                "callout", "code_block", "blockquote",
+                "horizontal_rule", "page_break", "key_value"
+            ]
         },
-        {
-            type: "object",
-            properties: {
-                block_id: { type: "string" },
-                type: { type: "string", enum: ["table"] },
-                cells: {
-                    type: "array",
-                    items: {
-                        type: "array",
-                        items: {
-                            type: "object",
-                            properties: {
-                                content: { type: "string" },
-                                bold: { type: "boolean" }
-                            },
-                            required: ["content", "bold"],
-                            additionalProperties: false
-                        }
-                    }
-                }
-            },
-            required: ["block_id", "type", "cells"],
-            additionalProperties: false
-        },
-        {
-            type: "object",
-            properties: {
-                block_id: { type: "string" },
-                type: { type: "string", enum: ["bullet_list", "numbered_list"] },
+        // Text block fields (paragraph, heading, callout, blockquote, code_block)
+        content: { type: "string" },
+        level: { type: "integer" },
+        font_size_pt: { type: "number" },
+        font_color: { type: "string" },
+        bold: { type: "boolean" },
+        italic: { type: "boolean" },
+        alignment: { type: "string", enum: ["LEFT", "CENTER", "RIGHT", "JUSTIFIED"] },
+
+        // callout-specific
+        style: { type: "string", enum: ["info", "warning", "success", "danger", "tip", "important"] },
+        title: { type: "string" },
+        icon: { type: "string" },
+
+        // table-specific
+        cells: {
+            type: "array",
+            items: {
+                type: "array",
                 items: {
-                    type: "array",
-                    items: {
-                        type: "object",
-                        properties: {
-                            content: { type: "string" },
-                            indent_level: { type: "integer" }
-                        },
-                        required: ["content", "indent_level"],
-                        additionalProperties: false
-                    }
+                    type: "object",
+                    properties: {
+                        content: { type: "string" },
+                        bold: { type: "boolean" }
+                    },
+                    required: ["content", "bold"],
+                    additionalProperties: false
                 }
-            },
-            required: ["block_id", "type", "items"],
-            additionalProperties: false
-        }
-    ]
+            }
+        },
+
+        // list-specific (bullet_list / numbered_list)
+        items: {
+            type: "array",
+            items: {
+                type: "object",
+                properties: {
+                    content: { type: "string" },
+                    indent_level: { type: "integer" }
+                },
+                required: ["content", "indent_level"],
+                additionalProperties: false
+            }
+        },
+
+        // key_value-specific
+        pairs: {
+            type: "array",
+            items: {
+                type: "object",
+                properties: {
+                    key: { type: "string" },
+                    value: { type: "string" }
+                },
+                required: ["key", "value"],
+                additionalProperties: false
+            }
+        },
+
+        // code_block-specific
+        language: { type: "string" }
+    },
+    required: ["block_id", "type"],
+    additionalProperties: false
 };
 
 const SECTION_SCHEMA = {
@@ -173,6 +183,19 @@ const SECTION_SCHEMA = {
         }
     },
     required: ["section_id", "blocks"],
+    additionalProperties: false
+};
+
+const EDIT_SECTION_SCHEMA = {
+    type: "object",
+    properties: {
+        target_section_id: { type: "string", description: "The exact section_id of the section you are targeting." },
+        blocks: {
+            type: "array",
+            items: SECTION_BLOCK_SCHEMA
+        }
+    },
+    required: ["target_section_id", "blocks"],
     additionalProperties: false
 };
 
@@ -202,5 +225,6 @@ function isIterativeType(docType) {
 module.exports = {
     OUTLINE_SCHEMA,
     SECTION_SCHEMA,
+    EDIT_SECTION_SCHEMA,
     isIterativeType
 };

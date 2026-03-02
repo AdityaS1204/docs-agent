@@ -5,7 +5,7 @@
  * Multi-tenant safe: Maps chat histories by `user_id` -> `doc_id`.
  */
 
-const { supabase } = require('./supabaseClient');
+const { supabase } = require('../supabaseClient');
 
 /**
  * Helper to get the UUID of a user by their Google Email.
