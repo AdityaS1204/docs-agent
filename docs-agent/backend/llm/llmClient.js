@@ -4,10 +4,10 @@ const { SYSTEM_PROMPT_INSTRUCTIONS } = require('../schema/documentSchema');
 const { isIterativeType } = require('../schema/iterativeSchema');
 const { MODELS, TOKEN_LIMITS } = require('../config/constants');
 const { validateLLMResponse, getJsonSchemaForType } = require('../schema/documentSchema');
-const { OUTLINE_SCHEMA, SECTION_SCHEMA } = require('../schema/iterativeSchema');
+const { OUTLINE_SCHEMA, SECTION_SCHEMA, EDIT_SECTION_SCHEMA } = require('../schema/iterativeSchema');
 
 const groq = new Groq({
-    apiKey: process.env.GROQ_APP_API_KEY,
+    apiKey: process.env.GROQ_APP_API_KEY || process.env.GROQ_API_KEY,
 });
 
 // ─────────────────────────────────────────
@@ -150,6 +150,62 @@ Section ID: ${sectionMeta.section_id}`;
 }
 
 // ─────────────────────────────────────────
+// Section Edit Mode
+// ─────────────────────────────────────────
+async function getSectionEditCompletion(userPrompt, docType, chatHistory, currentContent, blockId = "") {
+    const systemMsg = `You are a professional document editing agent. 
+The user wants to edit a ${docType.toUpperCase()} document. 
+${blockId ? `Currently editing the section: "${blockId}"` : "Determine EXACTLY WHICH section needs to be updated based on context."}
+
+Your task is to rewrite the section content entirely based on the user's instruction and the current content.
+CRITICAL RULES:
+- If current content is provided, stick to its overall theme unless told otherwise.
+- Return ONLY the new content blocks for this specific section.
+- Use unique block_ids starting with the section_id (e.g., "${blockId || 'id'}_b1").
+- Return ONLY valid JSON matching the schema.`;
+
+    const userContext = `Current Section Content:
+"""
+${currentContent || 'No current content found.'}
+"""
+
+User Instruction: ${userPrompt}
+${blockId ? `Target Section ID: ${blockId}` : "Identify the section and rewrite it."}`;
+
+    try {
+        const chatCompletion = await groq.chat.completions.create({
+            messages: [
+                { role: 'system', content: systemMsg },
+                ...chatHistory,
+                { role: 'user', content: userContext },
+            ],
+            model: MODELS.GPT_OSS_120B,
+            response_format: {
+                type: "json_schema",
+                json_schema: {
+                    name: "section_edit",
+                    strict: false,
+                    schema: EDIT_SECTION_SCHEMA
+                }
+            },
+            max_completion_tokens: TOKEN_LIMITS.MAX_COMPLETION_TOKENS
+        });
+
+        const rawContent = chatCompletion.choices[0]?.message?.content || '{}';
+        const parsed = JSON.parse(rawContent);
+        // Ensure target_section_id is set if we passed it in
+        if (blockId && !parsed.target_section_id) {
+            parsed.target_section_id = blockId;
+        }
+        console.log(`--- SECTION EDIT GENERATED: ${parsed.target_section_id} | Blocks: ${parsed.blocks?.length} ---`);
+        return parsed;
+    } catch (error) {
+        console.error('Section Edit Error:', error);
+        throw error;
+    }
+}
+
+// ─────────────────────────────────────────
 // Helper: Writing style per doc type
 // ─────────────────────────────────────────
 function getStyleForFormat(format) {
@@ -173,5 +229,6 @@ function getStyleForFormat(format) {
 module.exports = {
     getCompletion,
     getOutline,
-    generateSection
+    generateSection,
+    getSectionEditCompletion
 };
