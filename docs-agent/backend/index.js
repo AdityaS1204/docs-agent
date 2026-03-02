@@ -1,4 +1,6 @@
-require('dotenv').config({ path: '../.env' });
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+require('dotenv').config({ path: path.join(__dirname, '.env') }); // Fallback if root .env missing
 const express = require('express');
 const cors = require('cors');
 const { DEFAULT_PORT } = require('./config/constants');
@@ -7,6 +9,7 @@ const generateRoute = require('./routes/generate');
 const editRoute = require('./routes/edit');
 const syncRoute = require('./routes/sync');
 const sectionRoute = require('./routes/section');
+const editSectionRoute = require('./routes/editSection');
 const { clearChatHistory } = require('./state/chatStore');
 
 const app = express();
@@ -18,6 +21,7 @@ app.use(express.json());
 // Routes
 app.use('/generate', generateRoute);
 app.use('/edit', editRoute);
+app.use('/edit-section', editSectionRoute);
 app.use('/sync', syncRoute);
 app.use('/section', sectionRoute);
 
