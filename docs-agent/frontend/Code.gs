@@ -25,42 +25,77 @@ function showSidebar() {
  * Main entry point called from the sidebar.
  * Returns either the final message (single-shot), job metadata (iterative), or handles immediate editing.
  */
-function processPrompt(prompt, docType, operationMode = 'create') {
+function processPrompt(payload) {
     try {
+        const { prompt, format, operation, block_id, selected_text } = payload;
         const docId = DocumentApp.getActiveDocument().getId();
         const userEmail = Session.getEffectiveUser().getEmail();
+        const operationMode = operation || 'create';
+
+        let targetUrl = BACKEND_URL;
+        let finalPayload = {
+            prompt: prompt,
+            docType: format || 'general',
+            docId: docId,
+            email: userEmail,
+            operationMode: operationMode
+        };
+
+        // If we have a specific block_id and we are in edit mode, use the surgical endpoint
+        if (operationMode === 'edit' && block_id) {
+            targetUrl = BACKEND_URL.replace('/generate', '/edit-section');
+
+            // Get LIVE content from doc for context
+            let liveContent = "";
+            try {
+                const liveData = getSectionContent(block_id);
+                liveContent = liveData.content;
+            } catch (e) {
+                console.warn("Could not fetch live content for section:", block_id);
+            }
+
+            finalPayload = {
+                doc_id: docId,
+                block_id: block_id,
+                instruction: prompt,
+                current_content: liveContent,
+                doc_type: format || 'report',
+                email: userEmail
+            };
+        }
 
         const options = {
             method: 'post',
             contentType: 'application/json',
-            payload: JSON.stringify({
-                prompt: prompt,
-                docType: docType || 'general',
-                docId: docId,
-                email: userEmail,
-                operationMode: operationMode
-            }),
+            payload: JSON.stringify(finalPayload),
             muteHttpExceptions: true
         };
 
-        const response = UrlFetchApp.fetch(BACKEND_URL, options);
+        const response = UrlFetchApp.fetch(targetUrl, options);
         const data = JSON.parse(response.getContentText());
 
         console.log('--- BACKEND RESPONSE RECEIVED ---');
-        console.log('Mode:', data.mode || (data.jobId ? 'iterative_start' : (data.operation || 'single-shot')));
+        console.log('Target:', targetUrl);
         console.log('---------------------------------');
 
         // Handle structural error
         if (data.error) {
-            throw new Error(data.error);
+            throw new Error(data.message || data.error);
         }
 
-        // ── Edit Mode ──
+        // ── Edit Mode (Surgical or Legacy) ──
         if (operationMode === 'edit') {
-            if (!data.target_section_id || !data.blocks) {
+            const targetId = data.target_section_id || block_id;
+            if (!targetId || !data.blocks) {
                 throw new Error("AI returned invalid replacement data.");
             }
-            replaceSectionBlocks(data.target_section_id, data.blocks);
+            // Use markers if available, fallback to NamedRange logic if markers missing
+            const markerCheck = checkMarkersIntact(data.target_section_id);
+            if (markerCheck.intact) {
+                replaceSectionByMarkers(data.target_section_id, data.blocks);
+            } else {
+                replaceSectionBlocks(data.target_section_id, data.blocks); // Legacy fallback
+            }
             return { message: "Section updated successfully!", status: "complete" };
         }
 
@@ -149,9 +184,19 @@ function fetchAndRenderSection(jobId, index) {
         if (data.blocks && data.blocks.length > 0) {
             const doc = DocumentApp.getActiveDocument();
             const body = doc.getBody();
+
+            // 1. Insert Start Marker
+            const startMarker = body.appendParagraph(`[§${data.section_id}§]`);
+            applyMarkerStyle(startMarker);
+
+            // 2. Render Blocks
             const addedElements = renderBlocks(body, data.blocks);
 
-            // Phase 2: Create a NamedRange spanning the new section elements
+            // 3. Insert End Marker
+            const endMarker = body.appendParagraph(`[§/${data.section_id}§]`);
+            applyMarkerStyle(endMarker);
+
+            // Phase 2: Create a NamedRange (Legacy fallback/UX)
             if (data.section_id && addedElements.length > 0) {
                 const rangeBuilder = doc.newRange();
                 rangeBuilder.addElementsBetween(addedElements[0], addedElements[addedElements.length - 1]);
@@ -190,50 +235,70 @@ function replaceSectionBlocks(section_id, blocks) {
         throw new Error("Target section is empty.");
     }
 
-    // Attempt to locate the parent and the insertion index
-    let parent = null;
     let insertIndex = -1;
+    const elementsToDelete = [];
 
-    // Find the first valid element with a parent to determine our insertion point.
+    // 1. Snapshot the elements we intend to delete and find the insertion point
     for (let re of elements) {
-        const el = re.getElement();
-        parent = el.getParent();
-        if (parent === body) {
-            insertIndex = body.getChildIndex(el);
-            break;
-        } else if (parent && parent.getParent() === body) {
-            parent = parent.getParent();
-            insertIndex = body.getChildIndex(parent);
-            break;
+        let el = re.getElement();
+        // Traverse up to find the direct child of the body
+        let topChild = el;
+        while (topChild && topChild.getParent() && topChild.getParent().getType() !== DocumentApp.ElementType.BODY_SECTION) {
+            topChild = topChild.getParent();
+        }
+
+        if (topChild && topChild.getParent() && topChild.getParent().getType() === DocumentApp.ElementType.BODY_SECTION) {
+            if (insertIndex === -1) {
+                insertIndex = body.getChildIndex(topChild);
+            }
+            if (!elementsToDelete.includes(topChild)) {
+                elementsToDelete.push(topChild);
+            }
         }
     }
 
     if (insertIndex === -1) {
-        throw new Error("Could not determine where to insert the updated section.");
+        insertIndex = body.getNumChildren();
     }
 
-    // Safely remove the old elements
-    elements.reverse().forEach(re => {
+    // 2. Insert a temporary marker to anchor our position
+    const marker = body.insertParagraph(insertIndex, "--- [TEMP MARKER] ---");
+    const actualInsertIndex = body.getChildIndex(marker) + 1;
+
+    // 3. Render the new blocks after the marker
+    const addedElements = renderBlocks(body, blocks, actualInsertIndex);
+
+    // 4. Safely remove the snapshotized old elements
+    // We only remove top-level children of the body to avoid hierarchy issues
+    elementsToDelete.reverse().forEach(el => {
         try {
-            const el = re.getElement();
-            if (el.getParent()) {
-                if (el.isPartial()) {
-                    // For partials, it's safer to remove the whole element if we're replacing the section
-                    el.removeFromParent();
-                } else {
-                    el.removeFromParent();
-                }
+            // Protect main heading from being deleted if it's the only element
+            if (el.getType() === DocumentApp.ElementType.PARAGRAPH && el.asParagraph().getHeading() === DocumentApp.ParagraphHeading.TITLE) {
+                // If it's a main heading, don't delete it, just clear its content
+                el.asParagraph().setText("");
+            } else if (el.getParent() && body.getNumChildren() > 1) {
+                // NEVER remove the only remaining paragraph in the doc
+                el.removeFromParent();
             }
-        } catch (e) { } // Ignore removals that fail (e.g., child of already removed parent)
+        } catch (e) {
+            console.error("Failed to remove element during swap:", e);
+        }
     });
+
+    // 5. Cleanup: remove the marker and the old range
+    if (body.getNumChildren() > 1) {
+        marker.removeFromParent();
+    } else {
+        // If the marker IS the only thing left, we clear its text and leave it as an empty line
+        marker.setText("");
+    }
 
     targetRange.remove();
 
-    // Insert new elements at the exact cleared position
-    const addedElements = renderBlocks(body, blocks, insertIndex);
-
+    // 6. Create the new range
     if (addedElements.length > 0) {
         const rangeBuilder = doc.newRange();
+        // Specifically only include the elements we just rendered
         rangeBuilder.addElementsBetween(addedElements[0], addedElements[addedElements.length - 1]);
         doc.addNamedRange(section_id, rangeBuilder.build());
     }
@@ -434,10 +499,12 @@ function renderBlocks(body, blocks, insertIndex = -1) {
                 const bq = getElement(body.insertParagraph, body.appendParagraph, content);
                 bq.setIndentLeft(block.indent_left_inches ? block.indent_left_inches * 72 : 36);
                 bq.setItalic(true);
+                applyBlockStyles(bq, block); // Always apply styles
                 addedElements.push(bq);
                 if (block.attribution) {
                     const attr = getElement(body.insertParagraph, body.appendParagraph, block.attribution);
                     attr.setIndentLeft(bq.getIndentLeft()).setItalic(true);
+                    applyBlockStyles(attr, block); // Use same block parent styles if any
                     addedElements.push(attr);
                 }
                 break;
@@ -445,19 +512,20 @@ function renderBlocks(body, blocks, insertIndex = -1) {
             case 'callout':
                 const coText = (block.icon ? block.icon + " " : "") + (block.title ? block.title + "\n" : "") + content;
                 const co = getElement(body.insertParagraph, body.appendParagraph, coText);
+                applyBlockStyles(co, block); // Always apply styles first for reset
                 const coStyle = {};
                 coStyle[DocumentApp.Attribute.BACKGROUND_COLOR] = bgColor || (block.style === 'success' ? '#E8F5E9' : '#FFF9C4');
                 if (block.font_color === '#FFFFFF') coStyle[DocumentApp.Attribute.FOREGROUND_COLOR] = '#FFFFFF';
                 co.setAttributes(coStyle);
-                if (alignment === 'CENTER') co.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
                 addedElements.push(co);
                 break;
 
             case 'key_value':
                 if (block.items) {
                     block.items.forEach(item => {
-                        const kvText = (item.key_bold ? '' : '') + item.key + ': ' + item.value;
+                        const kvText = item.key + ': ' + item.value;
                         const kv = getElement(body.insertParagraph, body.appendParagraph, kvText);
+                        applyBlockStyles(kv, block); // Use parent block styles for reset
                         kv.editAsText().setBold(0, item.key.length, true);
                         addedElements.push(kv);
                     });
@@ -475,20 +543,22 @@ function renderBlocks(body, blocks, insertIndex = -1) {
 function applyBlockStyles(element, styles) {
     if (!element || !styles) return;
 
-    const bold = styles.bold !== undefined ? styles.bold : false;
-    const italic = styles.italic !== undefined ? styles.italic : false;
-    const underline = styles.underline !== undefined ? styles.underline : false;
+    // Only override bold/italic/underline if explicitly defined in the block data
+    if (styles.bold !== undefined) element.setBold(styles.bold);
+    if (styles.italic !== undefined) element.setItalic(styles.italic);
+    if (styles.underline !== undefined) element.setUnderline(styles.underline);
+
     const alignment = styles.alignment || styles.align;
-    const fontSize = styles.font_size_pt || styles.fontSize;
+    const fontSize = styles.font_size_pt || styles.fontSize || 11; // Ensure default size
 
-    element.setBold(bold);
-    element.setItalic(italic);
-    element.setUnderline(underline);
-
+    // Explicitly set a default color if not provided to override marker inheritance
     if (styles.font_color && styles.font_color !== 'default') {
         element.setForegroundColor(styles.font_color);
     } else if (styles.color) {
         element.setForegroundColor(styles.color);
+    } else {
+        // We MUST set this explicitly to override the 1pt white marker style inheritance
+        element.setForegroundColor('#000000');
     }
 
     if (alignment) {
@@ -499,7 +569,8 @@ function applyBlockStyles(element, styles) {
         element.setAlignment(align);
     }
 
-    if (fontSize) element.setFontSize(fontSize);
+    // Always ensure a readable font size to override marker inheritance
+    element.setFontSize(fontSize);
     if (styles.font_family) element.setFontFamily(styles.font_family);
 }
 
@@ -526,3 +597,180 @@ function applyInlineStyles(paragraph, inlineStyles) {
         if (style.link_url) text.setLinkUrl(start, end, style.link_url);
     });
 }
+
+/**
+ * Styles a paragraph to be an invisible marker (1pt, white).
+ */
+function applyMarkerStyle(paragraph) {
+    if (!paragraph) return;
+    try {
+        const text = paragraph.editAsText();
+        text.setFontSize(1);
+        text.setForegroundColor('#FFFFFF');
+        paragraph.setSpacingBefore(0);
+        paragraph.setSpacingAfter(0);
+    } catch (e) {
+        console.warn("Failed to apply marker style:", e);
+    }
+}
+
+/**
+ * Verifies if both start and end markers for a blockId are present in the document.
+ */
+function checkMarkersIntact(blockId) {
+    try {
+        const body = DocumentApp.getActiveDocument().getBody();
+        const startFound = body.findText(`\\[§${blockId}§\\]`);
+        const endFound = body.findText(`\\[§/${blockId}§\\]`);
+
+        if (startFound && endFound) {
+            return { intact: true, error: null };
+        }
+        return {
+            intact: false,
+            error: `Start/end marker missing for section: ${blockId}.`
+        };
+    } catch (e) {
+        return { intact: false, error: e.toString() };
+    }
+}
+
+/**
+ * Extracts the current text content between markers for a given blockId.
+ * Used by the backend/sidebar to provide context for edits.
+ */
+function getSectionContent(blockId) {
+    const doc = DocumentApp.getActiveDocument();
+    const body = doc.getBody();
+    const startRange = body.findText(`\\[§${blockId}§\\]`);
+    const endRange = body.findText(`\\[§/${blockId}§\\]`);
+
+    if (!startRange || !endRange) {
+        throw new Error(`Markers for ${blockId} not found.`);
+    }
+
+    const startMarkerParagraph = startRange.getElement().getParent();
+    const endMarkerParagraph = endRange.getElement().getParent();
+
+    const startIndex = body.getChildIndex(startMarkerParagraph);
+    const endIndex = body.getChildIndex(endMarkerParagraph);
+
+    let contentText = "";
+    for (let i = startIndex + 1; i < endIndex; i++) {
+        const child = body.getChild(i);
+        const type = child.getType();
+        if (type === DocumentApp.ElementType.PARAGRAPH) {
+            contentText += child.asParagraph().getText() + "\n";
+        } else if (type === DocumentApp.ElementType.LIST_ITEM) {
+            contentText += child.asListItem().getText() + "\n";
+        } else if (type === DocumentApp.ElementType.TABLE) {
+            contentText += "[Table Content]\n";
+        }
+    }
+
+    return {
+        content: contentText.trim(),
+        startIndex: startIndex + 1,
+        endIndex: endIndex - 1
+    };
+}
+
+/**
+ * Surgical replacement of section content based on markers.
+ */
+function replaceSectionByMarkers(blockId, blocks) {
+    const doc = DocumentApp.getActiveDocument();
+    const body = doc.getBody();
+    const startRange = body.findText(`\\[§${blockId}§\\]`);
+    const endRange = body.findText(`\\[§/${blockId}§\\]`);
+
+    if (!startRange || !endRange) {
+        throw new Error("Section markers missing. Surgical edit failed.");
+    }
+
+    const startMarkerParagraph = startRange.getElement().getParent().asParagraph();
+    const endMarkerParagraph = endRange.getElement().getParent().asParagraph();
+
+    const startIndex = body.getChildIndex(startMarkerParagraph) + 1;
+    const endIndex = body.getChildIndex(endMarkerParagraph) - 1;
+
+    // 1. Delete old content between markers (backwards to preserve indices)
+    for (let i = endIndex; i >= startIndex; i--) {
+        body.removeChild(body.getChild(i));
+    }
+
+    // 2. Render new blocks at the startIndex
+    renderBlocks(body, blocks, startIndex);
+
+    // 3. Ensure markers remain invisible
+    applyMarkerStyle(startMarkerParagraph);
+    applyMarkerStyle(endMarkerParagraph);
+
+    doc.saveAndClose();
+}
+
+/**
+ * Detects if the user has selected text and identifies which section it belongs to.
+ */
+function getSelectedTextInfo() {
+    try {
+        const doc = DocumentApp.getActiveDocument();
+        const selection = doc.getSelection();
+
+        if (!selection) return null;
+
+        const rangeElements = selection.getRangeElements();
+        if (rangeElements.length === 0) return null;
+
+        let selectedText = "";
+        rangeElements.forEach(re => {
+            const el = re.getElement();
+            if (el.asText) {
+                const textEl = el.asText();
+                const text = textEl.getText();
+                if (re.isPartial()) {
+                    selectedText += text.substring(re.getStartOffset(), re.getEndOffsetInclusive() + 1);
+                } else {
+                    selectedText += text;
+                }
+            }
+        });
+
+        // Identify which block it belongs to by looking at markers around the first selected element
+        let blockId = null;
+        const firstRangeEl = rangeElements[0];
+        const firstEl = firstRangeEl.getElement();
+        const body = doc.getBody();
+
+        // Find the parent element that is a direct child of the body
+        let topChild = firstEl;
+        while (topChild && topChild.getParent() && topChild.getParent().getType() !== DocumentApp.ElementType.BODY_SECTION) {
+            topChild = topChild.getParent();
+        }
+
+        if (topChild && topChild.getParent()) {
+            let childIndex = body.getChildIndex(topChild);
+            // Look backwards for a start marker [§...§]
+            for (let i = childIndex; i >= 0; i--) {
+                let p = body.getChild(i);
+                if (p.getType() === DocumentApp.ElementType.PARAGRAPH) {
+                    let text = p.asParagraph().getText();
+                    let match = text.match(/\[§(.*?)§\]/);
+                    if (match && !text.includes('/')) {
+                        blockId = match[1];
+                        break;
+                    }
+                }
+            }
+        }
+
+        return {
+            text: selectedText.trim(),
+            blockId: blockId
+        };
+    } catch (e) {
+        console.error("Error in getSelectedTextInfo:", e);
+        return null;
+    }
+}
+
