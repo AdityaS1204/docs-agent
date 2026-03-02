@@ -886,8 +886,8 @@ const RESPONSE_JSON_SCHEMA = {
             default_style: {
               type: "object",
               properties: {
-                font_family: { type: "string" },
-                font_size_pt: { type: "number" },
+                font_family: { type: ["string", "null"] },
+                font_size_pt: { type: ["number", "null"] },
                 line_spacing: { type: "number" },
                 text_color: { type: "string" },
                 paragraph_spacing_after_pt: { type: "number" }
@@ -920,7 +920,7 @@ const RESPONSE_JSON_SCHEMA = {
                       type: { type: "string", enum: ["main_heading", "sub_heading", "paragraph", "bullet_list", "numbered_list", "table", "callout", "code_block", "blockquote", "horizontal_rule", "page_break", "spacer", "key_value"] },
                       content: { type: "string" },
                       level: { type: "integer" },
-                      font_size_pt: { type: "number" },
+                      font_size_pt: { type: ["number", "null"] },
                       font_color: { type: "string" },
                       bold: { type: "boolean" },
                       italic: { type: "boolean" },
