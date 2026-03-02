@@ -156,6 +156,67 @@
             background-color: #f0f0f0;
         }
 
+        /* Selection Context Box */
+        .selection-container {
+            margin: 0 16px 8px;
+            padding: 10px 14px;
+            background: #fdfdfd;
+            border: 1px dashed #cccccc;
+            border-radius: 12px;
+            display: none;
+            flex-direction: column;
+            gap: 6px;
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .selection-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 10px;
+            font-weight: 700;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .selected-text-content {
+            font-size: 12px;
+            color: #444;
+            line-height: 1.4;
+            max-height: 80px;
+            overflow-y: auto;
+            font-style: italic;
+            border-left: 3px solid #000;
+            padding-left: 8px;
+        }
+
+        .close-selection-btn {
+            background: none;
+            border: none;
+            color: #999;
+            cursor: pointer;
+            font-size: 16px;
+            line-height: 1;
+            padding: 0 4px;
+        }
+
+        .close-selection-btn:hover {
+            color: #ff5252;
+        }
+
         /* Shimmer Effect */
         .shimmer-wrapper {
             align-self: flex-start;
@@ -321,6 +382,17 @@
         </div>
     </div>
 
+    <!-- Selection Context Box -->
+    <div id="selection-container" class="selection-container">
+        <div class="selection-header">
+            <span>Context: Selected Text</span>
+            <button class="close-selection-btn" onclick="clearSelection()"
+                title="Dismiss selection context">&times;</button>
+        </div>
+        <div id="selected-text-content" class="selected-text-content">No text selected. Highlight text in the doc to
+            edit.</div>
+    </div>
+
     <div class="input-container">
         <div class="input-wrapper">
             <textarea id="prompt" placeholder="Ask anything..." rows="1"></textarea>
@@ -346,7 +418,7 @@
     </div>
 
     <!-- Document Types Selection & Controls -->
-    <div class="select-container">
+    <div class="select-container" style="margin-bottom: 12px;">
         <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 6px;">
             <label for="doc-type-select" style="margin-bottom: 0;">Document Format</label>
             <button class="clear-chat-btn" onclick="clearChat()" title="Clear AI Memory for this document">
@@ -386,6 +458,8 @@
         const opModeSelect = document.getElementById('op-mode-select');
         let selectedDocType = 'general';
         let operationMode = 'create';
+        let currentSelectedText = null;
+        let currentSelectedBlockId = null;
 
         // Update selectedDocType on change
         docTypeSelect.addEventListener('change', (e) => {
@@ -394,7 +468,53 @@
 
         opModeSelect.addEventListener('change', (e) => {
             operationMode = e.target.value;
+            // When switching to edit, immediately check selection
+            if (operationMode === 'edit') {
+                checkSelection();
+            }
         });
+
+        // Poller for selection
+        setInterval(() => {
+            // Only poll if we are in edit mode or idle
+            if (!isProcessing) {
+                checkSelection();
+            }
+        }, 3000);
+
+        function checkSelection() {
+            google.script.run
+                .withSuccessHandler((res) => {
+                    if (res && res.text && res.text.length > 0) {
+                        showSelection(res.text, res.blockId);
+                    } else if (currentSelectedText && !isProcessing) {
+                        // Don't auto-clear if user is currently typing/processing
+                    }
+                })
+                .getSelectedTextInfo();
+        }
+
+        function showSelection(text, blockId) {
+            currentSelectedText = text;
+            currentSelectedBlockId = blockId;
+            const container = document.getElementById('selection-container');
+            const content = document.getElementById('selected-text-content');
+
+            content.innerText = text.length > 150 ? text.substring(0, 150) + '...' : text;
+            container.style.display = 'flex';
+
+            if (blockId) {
+                content.innerHTML += `<br><span style="font-size:9px; color:#2196F3; font-weight:bold; text-transform:uppercase;">Target: ${blockId}</span>`;
+            } else {
+                content.innerHTML += `<br><span style="font-size:9px; color:#f44336; font-weight:bold; text-transform:uppercase;">No Section Detected - Generic Edit</span>`;
+            }
+        }
+
+        function clearSelection() {
+            currentSelectedText = null;
+            currentSelectedBlockId = null;
+            document.getElementById('selection-container').style.display = 'none';
+        }
 
         const COPY_SVG = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
@@ -499,19 +619,30 @@
             sendBtn.innerHTML = SQUARE_SVG;
             sendBtn.classList.add('stopping');
 
-            const isIterative = ITERATIVE_TYPES.has(selectedDocType) && operationMode === 'create';
+            const isIterative = ITERATIVE_TYPES.has(selectedDocType) && operationMode === 'create' && !currentSelectedBlockId;
 
             // Add shimmer with dynamic message
             const shimmerWrapper = document.createElement('div');
             shimmerWrapper.id = 'shimmer-placeholder';
             shimmerWrapper.className = 'shimmer-wrapper';
             shimmerWrapper.innerHTML = `
-                <div class="thinking-text" id="thinking-msg">${operationMode === 'edit' ? 'Analyzing outline & rewriting section...' : getThinkingMessage(selectedDocType)}</div>
+                <div class="thinking-text" id="thinking-msg">${operationMode === 'edit' ? 'Rewriting section...' : getThinkingMessage(selectedDocType)}</div>
                 ${isIterative ? '<div class="progress-bar-wrapper"><div class="progress-bar-fill"></div></div>' : ''}
             `;
             chatContainer.appendChild(shimmerWrapper);
             chatContainer.scrollTop = chatContainer.scrollHeight;
 
+            // Prepare payload
+            const payload = {
+                prompt: text,
+                format: selectedDocType,
+                operation: operationMode,
+                // Surgical edit context
+                block_id: currentSelectedBlockId,
+                selected_text: currentSelectedText
+            };
+
+            // Sidebar calling GAS which then calls backend
             google.script.run
                 .withSuccessHandler(function (response) {
                     if (abortGeneration) return;
@@ -521,6 +652,7 @@
                     } else {
                         removeShimmer();
                         appendMessage(response.message || response, 'ai');
+                        if (operationMode === 'edit') clearSelection();
                         resetInput();
                     }
                 })
@@ -530,7 +662,7 @@
                     appendMessage("Error: " + err, 'ai');
                     resetInput();
                 })
-                .processPrompt(text, selectedDocType, operationMode);
+                .processPrompt(payload);
         }
 
         function stopGeneration() {
